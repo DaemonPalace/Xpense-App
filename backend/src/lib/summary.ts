@@ -2,7 +2,7 @@
 
 export interface Income { amountMinor: number }
 export interface Goal { targetMinor: number; monthly: boolean; targetDate?: string | null }
-export interface Txn { date: string; amountMinor: number; type: string }
+export interface Txn { date: string; amountMinor: number; type: string; category?: string }
 
 export interface Summary {
   month: string;
@@ -18,6 +18,10 @@ export interface Summary {
   safeToSpendTodayMinor: number;
   pctUsed: number;
   status: "ok" | "warning" | "over";
+  /** Expense per category this month (dashboard). */
+  byCategoryMinor: Record<string, number>;
+  /** Expense per day of the month, index 0 = day 1 (weekly cumulative chart). */
+  dailyMinor: number[];
 }
 
 // ponytail: one zone for every user (MVP targets La Sabana). Add a profile timezone when users are elsewhere.
@@ -59,5 +63,13 @@ export function summarize(today: string, incomes: Income[], goals: Goal[], txns:
   const pctUsed = allowedMinor > 0 ? Math.round((spentMinor * 100) / allowedMinor) : spentMinor > 0 ? 100 : 0;
   const status = remainingMinor < 0 ? "over" : pctUsed >= 80 || safeToSpendTodayMinor < 0 ? "warning" : "ok";
 
-  return { month, daysLeft, inflowsMinor, savingsGoalMinor, savedMinor, allowedMinor, spentMinor, spentTodayMinor, remainingMinor, dailyLimitMinor, safeToSpendTodayMinor, pctUsed, status };
+  const byCategoryMinor: Record<string, number> = {};
+  const dailyMinor = new Array<number>(daysInMonth).fill(0);
+  for (const t of expenses) {
+    const c = t.category ?? "other";
+    byCategoryMinor[c] = (byCategoryMinor[c] ?? 0) + t.amountMinor;
+    dailyMinor[Number(t.date.slice(8, 10)) - 1] += t.amountMinor;
+  }
+
+  return { month, daysLeft, inflowsMinor, savingsGoalMinor, savedMinor, allowedMinor, spentMinor, spentTodayMinor, remainingMinor, dailyLimitMinor, safeToSpendTodayMinor, pctUsed, status, byCategoryMinor, dailyMinor };
 }

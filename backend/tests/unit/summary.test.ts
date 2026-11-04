@@ -49,6 +49,18 @@ describe("summarize (FR-4)", () => {
     expect(monthlyContribution({ targetMinor: 300, monthly: false, targetDate: "2026-10-01" }, "2026-11-04")).toBe(0);
   });
 
+  it("breaks spend down by category and day", () => {
+    const s = summarize("2026-11-10", income, goal, [
+      { date: "2026-11-02", amountMinor: 500, type: "expense", category: "snacks" },
+      { date: "2026-11-02", amountMinor: 300, type: "expense", category: "food" },
+      { date: "2026-11-09", amountMinor: 200, type: "expense", category: "snacks" },
+      { date: "2026-11-09", amountMinor: 999, type: "savings", category: "savings" },
+    ]);
+    expect(s.byCategoryMinor).toEqual({ snacks: 700, food: 300 });
+    expect(s.dailyMinor).toHaveLength(30);
+    expect([s.dailyMinor[1], s.dailyMinor[8]]).toEqual([800, 200]);
+  });
+
   it("local day is Bogotá (UTC-5)", () => {
     expect(localToday(new Date("2026-11-05T03:00:00Z"))).toBe("2026-11-04");
   });

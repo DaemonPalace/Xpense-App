@@ -20,40 +20,41 @@ function mulberry32(seed: number) {
 
 const seedOf = (s: string) => createHash("sha256").update(s).digest().readUInt32LE(0);
 
+const P = (pesos: number) => pesos * 100; // COP → minor units
+
+// A La Sabana student's month, in COP, using local merchants so categorize() and ant detection have real work.
 const DAILY: Record<AccountType, [string, number, number, number][]> = {
-  // [description, probability per day, min cents, max cents]
+  // [description, probability per day, min minor, max minor]
   checking: [
-    ["Grocery Market", 0.35, 1500, 9000],
-    ["Corner Cafe", 0.3, 300, 900],
-    ["Shell Gas Station fuel", 0.12, 3000, 6500],
-    ["Uber trip", 0.08, 800, 3500],
-    ["City Pharmacy", 0.04, 500, 4000],
+    ["Almuerzo restaurante campus", 0.45, P(12_000), P(22_000)],
+    ["JUAN VALDEZ CAFE", 0.3, P(4_500), P(12_000)],
+    ["Tienda OMA snack", 0.25, P(3_000), P(8_000)],
+    ["Recarga TuLlave TransMilenio", 0.15, P(10_000), P(30_000)],
+    ["Parqueadero Universidad", 0.2, P(6_000), P(12_000)],
+    ["DIDI viaje", 0.08, P(9_000), P(25_000)],
+    ["Droguería", 0.04, P(8_000), P(45_000)],
   ],
   credit_card: [
-    ["Amazon order", 0.2, 1200, 15000],
-    ["Restaurant dinner", 0.15, 2500, 9000],
-    ["Cinema tickets", 0.04, 1500, 4000],
-    ["Department Store", 0.05, 2000, 12000],
+    ["RAPPI*RESTAURANTE", 0.12, P(25_000), P(60_000)],
+    ["UBER viaje", 0.06, P(10_000), P(30_000)],
+    ["Cine Colombia", 0.05, P(15_000), P(35_000)],
+    ["Falabella compra", 0.04, P(50_000), P(250_000)],
+    ["Librería Lerner", 0.03, P(20_000), P(120_000)],
   ],
   savings: [],
 };
 
 const MONTHLY: Record<AccountType, [number, string, number, "expense" | "savings"][]> = {
-  // [day of month, description, cents, type]
-  checking: [
-    [1, "Rent payment", 140000, "expense"],
-    [5, "Electric utility bill", 8500, "expense"],
-    [8, "Internet service", 6000, "expense"],
-    [20, "Water bill", 3500, "expense"],
-  ],
+  // [day of month, description, minor, type]
+  checking: [[3, "Plan celular internet", P(55_000), "expense"]],
   credit_card: [
-    [15, "Netflix subscription", 1599, "expense"],
-    [18, "Spotify subscription", 1099, "expense"],
-    [3, "Gym membership", 4000, "expense"],
+    [15, "NETFLIX.COM", P(26_900), "expense"],
+    [18, "SPOTIFY", P(16_900), "expense"],
+    [3, "Gimnasio Bodytech", P(120_000), "expense"],
   ],
   savings: [
-    [1, "Transfer to savings", 30000, "savings"],
-    [15, "Transfer to savings", 30000, "savings"],
+    [1, "Transferencia a ahorro", P(100_000), "savings"],
+    [15, "Transferencia a ahorro", P(100_000), "savings"],
   ],
 };
 

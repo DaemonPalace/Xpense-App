@@ -28,11 +28,19 @@ beforeEach(() => {
   });
 });
 
-const call = (method: string, path: string, body?: unknown) =>
-  handler({ rawPath: path, headers: {}, body: body ? JSON.stringify(body) : undefined, requestContext: { http: { method } } } as any).then((r: any) => ({
+const call = (method: string, url: string, body?: unknown) => {
+  const [path, qs] = url.split("?");
+  return handler({
+    rawPath: path,
+    headers: {},
+    queryStringParameters: qs ? Object.fromEntries(new URLSearchParams(qs)) : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    requestContext: { http: { method } },
+  } as any).then((r: any) => ({
     status: r.statusCode,
     body: r.body ? JSON.parse(r.body) : undefined,
   }));
+};
 
 describe("consent gate (FR-1.2)", () => {
   it("blocks writes until consent, allows consenting and reads", async () => {
@@ -75,5 +83,48 @@ describe("GET /api/summary", () => {
     const { status, body } = await call("GET", "/api/summary");
     expect(status).toBe(200);
     expect(body).toMatchObject({ consented: true, onboarded: true, currency: "COP", allowedMinor: 80_000_000, spentTodayMinor: 1_500_000, today });
+  });
+});
+
+describe("vault and devices", () => {
+  beforeEach(() => void (profile.consentVersion = "2026-11"));
+
+  it("deposit writes balance + savings transaction atomically", async () => {
+    const res = await call("POST", "/api/vault/deposit", { amountMinor: 5_000_000 });
+    expect(res.status).toBe(201);
+    const tw = writes.find((w) => w.name === "TransactWriteCommand").input.TransactItems;
+    expect(tw[0].Update.Key.SK).toBe("VAULT");
+    expect(tw[1].Put.Item).toMatchObject({ type: "savings", category: "savings", origin: "vault", amountMinor: 5_000_000 });
+  });
+
+  it("withdraw more than the balance is 409", async () => {
+    vi.mocked(ddb.send).mockImplementation(async (cmd: any) => {
+      if (cmd.constructor.name === "GetCommand") return { Item: cmd.input.Key.SK === "PROFILE" ? profile : undefined };
+      if (cmd.constructor.name === "TransactWriteCommand") throw Object.assign(new Error("x"), { name: "TransactionCanceledException" });
+      return {};
+    });
+    expect((await call("POST", "/api/vault/withdraw", { amountMinor: 1 })).body.error.code).toBe("insufficient_vault");
+  });
+
+  it("vault movements can't be deleted through the transactions API", async () => {
+    expect((await call("DELETE", "/api/transactions/X?date=2026-11-01")).status).toBe(204);
+    const del = writes.find((w) => w.name === "TransactWriteCommand").input.TransactItems[0].Delete;
+    expect(del.ConditionExpression).toContain("origin <> :vault");
+    expect(del.ExpressionAttributeValues[":vault"]).toBe("vault");
+  });
+
+  it("devices accept only Expo push tokens", async () => {
+    expect((await call("POST", "/api/devices", { token: "abc", platform: "ios" })).status).toBe(400);
+    expect((await call("POST", "/api/devices", { token: "ExponentPushToken[xYz-123]", platform: "android" })).status).toBe(201);
+  });
+
+  it("summary flags ant expenses and reports the vault", async () => {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bogota" }).format(new Date());
+    items["INCOME#"] = [{ amountMinor: 100_000_000 }];
+    items[`TXN#${today.slice(0, 7)}-`] = [1, 2, 3].map((i) => ({ txnId: `t${i}`, date: today, amountMinor: 500_000, type: "expense", category: "snacks" }));
+    const { body } = await call("GET", "/api/summary");
+    expect(body.ant).toMatchObject({ count: 3, totalMinor: 1_500_000, txnIds: ["t1", "t2", "t3"] });
+    expect(body.vaultBalanceMinor).toBe(0);
+    expect(body.byCategoryMinor).toEqual({ snacks: 1_500_000 });
   });
 });

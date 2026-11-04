@@ -9,6 +9,7 @@ import { HttpError, requireOrigin, requireUser } from "./lib/auth";
 import { acctSk, activePk, aggSk, ddb, forecastSk, jobSk, profileSk, queryAll, TABLE, txnSk, userPk, type Item } from "./lib/db";
 import { errorFields, log, withCorrelation } from "./lib/log";
 import { MAX_ABS_MINOR } from "./lib/money";
+import { antExpenses, DEFAULT_ANT_THRESHOLD_MINOR } from "./lib/ant";
 import { localToday, summarize } from "./lib/summary";
 import { toDto, toItem, validateTransactionInput, type TransactionInput } from "./lib/transactions";
 
@@ -107,6 +108,9 @@ function goalInput(b: any) {
   return { name: b.name.trim(), targetMinor: b.targetMinor, monthly: b.monthly, targetDate: b.monthly ? null : b.targetDate };
 }
 
+const vaultLocked = () => new HttpError(409, "vault_transaction", "Vault movements can't be edited; use a vault withdrawal");
+const EXPO_TOKEN = /^Expo(nent)?PushToken\[[\w-]+\]$/;
+
 const plainDto = ({ PK, SK, ...x }: Item) => x;
 
 /** List/create/update/delete for small per-user collections stored as `<prefix><id>`. */
@@ -176,12 +180,16 @@ const routes: [string, string, Handler][] = [
   }],
   ["PATCH", "/api/me", async (ctx) => {
     const profile = await touchProfile(ctx);
-    const { displayName, currency } = ctx.body ?? {};
+    const { displayName, currency, antThresholdMinor } = ctx.body ?? {};
     const sets: string[] = [];
     const values: Record<string, unknown> = {};
     if (displayName !== undefined) {
       if (typeof displayName !== "string" || displayName.trim().length < 1 || displayName.length > 60) throw badRequest("displayName must be 1–60 chars");
       sets.push("displayName = :d"), (values[":d"] = displayName.trim());
+    }
+    if (antThresholdMinor !== undefined) {
+      if (!isPositiveAmount(antThresholdMinor)) throw badRequest("antThresholdMinor must be a positive integer");
+      sets.push("antThresholdMinor = :a"), (values[":a"] = antThresholdMinor);
     }
     if (currency !== undefined && currency !== profile.currency) {
       if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) throw badRequest("currency must be an ISO 4217 code");
@@ -266,6 +274,7 @@ const routes: [string, string, Handler][] = [
     const oldSk = txnSk(requireDate(ctx.query.date), ctx.params.txnId);
     const existing = await getItem(pk(ctx), oldSk);
     if (!existing) throw notFound();
+    if (existing.origin === "vault") throw vaultLocked();
     const input = txnInput(ctx.body);
     const item = { ...toItem(ctx.user.sub, input, existing.origin, ctx.correlationId, { txnId: existing.txnId, createdAt: existing.createdAt, jobId: existing.jobId, fingerprint: existing.fingerprint }) };
     const writes: any[] = [{ Put: { TableName: TABLE, Item: item } }, markTxnChange(ctx)];
@@ -278,7 +287,18 @@ const routes: [string, string, Handler][] = [
     try {
       await ddb.send(
         new TransactWriteCommand({
-          TransactItems: [{ Delete: { TableName: TABLE, Key: { PK: pk(ctx), SK: sk }, ConditionExpression: "attribute_exists(SK)" } }, markTxnChange(ctx)],
+          TransactItems: [
+            {
+              Delete: {
+                TableName: TABLE,
+                Key: { PK: pk(ctx), SK: sk },
+                // Vault movements are only reversed with a withdrawal, so the vault balance stays true.
+                ConditionExpression: "attribute_exists(SK) AND (attribute_not_exists(origin) OR origin <> :vault)",
+                ExpressionAttributeValues: { ":vault": "vault" },
+              },
+            },
+            markTxnChange(ctx),
+          ],
         }),
       );
     } catch (e) {
@@ -412,12 +432,18 @@ const routes: [string, string, Handler][] = [
   ...crud("/api/goals", "GOAL#", goalInput),
   ["GET", "/api/summary", async (ctx) => {
     const today = localToday();
-    const [profile, incomes, goals, txns] = await Promise.all([
+    const [profile, incomes, goals, txns, vault] = await Promise.all([
       touchProfile(ctx),
       queryAll(pk(ctx), "INCOME#"),
       queryAll(pk(ctx), "GOAL#"),
-      queryAll(pk(ctx), `TXN#${today.slice(0, 7)}-`, { ProjectionExpression: "#d, amountMinor, #t", ExpressionAttributeNames: { "#d": "date", "#t": "type" } }),
+      queryAll(pk(ctx), `TXN#${today.slice(0, 7)}-`, {
+        ProjectionExpression: "txnId, #d, amountMinor, #t, category",
+        ExpressionAttributeNames: { "#d": "date", "#t": "type" },
+      }),
+      getItem(pk(ctx), "VAULT"),
     ]);
+    const antThresholdMinor = profile.antThresholdMinor ?? DEFAULT_ANT_THRESHOLD_MINOR;
+    const ant = antExpenses(txns as any[], antThresholdMinor);
     return {
       status: 200,
       body: {
@@ -425,9 +451,64 @@ const routes: [string, string, Handler][] = [
         currency: profile.currency,
         consented: Boolean(profile.consentVersion),
         onboarded: incomes.length > 0,
+        vaultBalanceMinor: vault?.balanceMinor ?? 0,
+        antThresholdMinor,
+        ant: { count: ant.count, totalMinor: ant.totalMinor, byCategory: ant.byCategory, txnIds: ant.ids },
         ...summarize(today, incomes as any[], goals as any[], txns as any[]),
       },
     };
+  }],
+
+  // ---- vault (caja fuerte, F11): savings transactions + a balance kept in step in one transaction ----
+  ["GET", "/api/vault", async (ctx) => ({ status: 200, body: { balanceMinor: (await getItem(pk(ctx), "VAULT"))?.balanceMinor ?? 0 } })],
+  ...(["deposit", "withdraw"] as const).map((op): [string, string, Handler] => ["POST", `/api/vault/${op}`, async (ctx) => {
+    const amountMinor = ctx.body?.amountMinor;
+    if (!isPositiveAmount(amountMinor)) throw badRequest("amountMinor must be a positive integer");
+    await touchProfile(ctx);
+    const deposit = op === "deposit";
+    const item = toItem(
+      ctx.user.sub,
+      { date: localToday(), amountMinor: deposit ? amountMinor : -amountMinor, type: "savings", category: "savings", description: deposit ? "Caja fuerte: depósito" : "Caja fuerte: retiro" },
+      "vault",
+      ctx.correlationId,
+    );
+    try {
+      await ddb.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: TABLE,
+                Key: { PK: pk(ctx), SK: "VAULT" },
+                UpdateExpression: "ADD balanceMinor :d",
+                ConditionExpression: deposit ? undefined : "balanceMinor >= :a",
+                ExpressionAttributeValues: deposit ? { ":d": amountMinor } : { ":d": -amountMinor, ":a": amountMinor },
+              },
+            },
+            { Put: { TableName: TABLE, Item: item } },
+            markTxnChange(ctx),
+          ],
+        }),
+      );
+    } catch (e) {
+      if (!deposit && isConditionFail(e)) throw new HttpError(409, "insufficient_vault", "Not enough money in the vault");
+      throw e;
+    }
+    const vault = await getItem(pk(ctx), "VAULT");
+    return { status: 201, body: { balanceMinor: vault?.balanceMinor ?? 0, transaction: toDto(item) } };
+  }]),
+
+  // ---- push devices (F10) ----
+  ["POST", "/api/devices", async (ctx) => {
+    const { token, platform } = ctx.body ?? {};
+    if (typeof token !== "string" || !EXPO_TOKEN.test(token)) throw badRequest("token must be an Expo push token");
+    if (platform !== "ios" && platform !== "android") throw badRequest("platform must be ios or android");
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: { PK: pk(ctx), SK: `DEVICE#${token}`, token, platform, createdAt: now() } }));
+    return { status: 201, body: { token, platform } };
+  }],
+  ["DELETE", "/api/devices/:token", async (ctx) => {
+    await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: pk(ctx), SK: `DEVICE#${ctx.params.token}` } }));
+    return { status: 204 };
   }],
 
   // ---- insights ----
@@ -447,7 +528,7 @@ const routes: [string, string, Handler][] = [
 ];
 
 // Writes need Habeas Data consent first (FR-1.2); consenting and deleting the account do not.
-const CONSENT_EXEMPT = new Set(["POST /api/me/consent", "DELETE /api/me"]);
+const CONSENT_EXEMPT = new Set(["POST /api/me/consent", "DELETE /api/me", "DELETE /api/devices/:token"]);
 
 const compiled = routes.map(([method, path, handler]) => {
   const names: string[] = [];

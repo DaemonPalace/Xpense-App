@@ -10,7 +10,7 @@ const KEYWORDS: [Category, string[]][] = [
   ["transport", ["transmilenio", "tullave", "sitp", "metro", "transit", "fuel", "gasolina", "gas station", "peaje", "terpel"]],
   ["snacks", ["juan valdez", "oma", "tostao", "coffee", "cafe", "snack", "gaseosa", "bakery", "panaderia", "dulceria"]],
   ["food", ["rappi", "ifood", "restaurant", "almuerzo", "lunch", "pizza", "grocer", "market", "mercado", "exito", "carulla", "jumbo", "olimpica", "d1"]],
-  ["health", ["pharmacy", "farmacia", "drogueria", "doctor", "dentist", "odontolog", "clinic", "hospital", "gym", "eps"]],
+  ["health", ["pharmacy", "farmacia", "drogueria", "doctor", "dentist", "odontolog", "clinic", "hospital", "gym", "gimnasio", "bodytech", "smartfit", "eps"]],
   ["academic", ["libreria", "libro", "book", "fotocopia", "copias", "papeleria", "matricula", "universidad", "coursera", "udemy"]],
   ["outings", ["cinema", "cine", "movie", "concert", "concierto", "discoteca", "steam", "game", "cerveza", "bowling"]],
   ["housing", ["rent", "arriendo", "mortgage", "landlord", "administracion", "electric", "water", "internet", "gas bill", "phone bill", "utility", "servicios publicos", "enel", "codensa", "epm"]],

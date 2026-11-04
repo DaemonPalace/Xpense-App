@@ -6,7 +6,7 @@ import { txnSk, userPk, type Item } from "./db";
 export const CATEGORIES = ["food", "snacks", "transport", "rideshare", "parking", "outings", "academic", "shopping", "health", "housing", "subscriptions", "savings", "other"] as const;
 export type Category = (typeof CATEGORIES)[number];
 export type TxnType = "expense" | "savings";
-export type Origin = "manual" | "sync" | "csv";
+export type Origin = "manual" | "sync" | "csv" | "vault";
 
 export interface TransactionInput {
   date: string;

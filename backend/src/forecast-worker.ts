@@ -1,9 +1,12 @@
 import type { SQSBatchResponse, SQSEvent } from "aws-lambda";
-import { GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { SendMessageBatchCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { activePk, aggSk, batchWriteAll, ddb, delReq, forecastSk, profileSk, putReq, queryAll, TABLE, userPk } from "./lib/db";
 import { aggregate } from "./lib/aggregate";
+import { dueAlerts } from "./lib/alerts";
 import { forecast } from "./lib/forecast";
+import { sendPush } from "./lib/push";
+import { localToday, summarize } from "./lib/summary";
 import { errorFields, log } from "./lib/log";
 
 const sqs = new SQSClient({});
@@ -32,6 +35,36 @@ export async function recompute(userId: string, correlationId?: string) {
   const result = forecast(months.values());
   await ddb.send(new PutCommand({ TableName: TABLE, Item: { PK, SK: forecastSk(), ...result, computedAt, sourceChangedAt } }));
   log("info", "forecast recomputed", { correlationId, userId, transactions: txns.length, months: months.size, status: result.status });
+  await fireAlerts(userId, txns, correlationId);
+}
+
+/** Records each due alert once (conditional put) and pushes it to the user's devices. */
+async function fireAlerts(userId: string, txns: Record<string, any>[], correlationId?: string) {
+  const PK = userPk(userId);
+  const today = localToday();
+  const [incomes, goals] = await Promise.all([queryAll(PK, "INCOME#"), queryAll(PK, "GOAL#")]);
+  const alerts = dueAlerts(summarize(today, incomes as any[], goals as any[], txns as any[]), today);
+  if (!alerts.length) return;
+  const expiresAt = Math.floor(Date.now() / 1000) + 100 * 86400;
+  let devices: string[] | undefined;
+  for (const a of alerts) {
+    try {
+      await ddb.send(
+        new PutCommand({
+          TableName: TABLE,
+          Item: { PK, SK: a.sk, kind: a.kind, title: a.title, body: a.body, firedAt: new Date().toISOString(), expiresAt },
+          ConditionExpression: "attribute_not_exists(SK)",
+        }),
+      );
+    } catch (e: any) {
+      if (e?.name === "ConditionalCheckFailedException") continue; // already fired this period
+      throw e;
+    }
+    devices ??= (await queryAll(PK, "DEVICE#", { ProjectionExpression: "#t", ExpressionAttributeNames: { "#t": "token" } })).map((d) => d.token);
+    const gone = await sendPush(devices, a.title, a.body, correlationId).catch((err) => (log("warn", "push failed", { correlationId, ...errorFields(err) }), []));
+    for (const token of gone) await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK, SK: `DEVICE#${token}` } }));
+    log("info", "alert fired", { correlationId, userId, kind: a.kind, devices: devices.length });
+  }
 }
 
 /** Scheduler mode: enqueue every user active in the last ~3 months (data-model "Activity marker"). */

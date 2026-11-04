@@ -21,5 +21,8 @@ describe("categorize", () => {
     ["Cine Colombia", "outings"],
     ["Medicine shop", "shopping"],
     ["Droguería Colsubsidio", "health"],
+    ["Gimnasio Bodytech", "health"],
+    ["Tienda OMA snack", "snacks"],
+    ["Almuerzo restaurante campus", "food"],
   ])("%s → %s", (d, c) => expect(categorize(d)).toBe(c));
 });
