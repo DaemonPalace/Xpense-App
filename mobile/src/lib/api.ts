@@ -49,4 +49,51 @@ export interface Summary {
   safeToSpendTodayMinor: number;
   pctUsed: number;
   status: 'ok' | 'warning' | 'over';
+  byCategoryMinor: Record<string, number>;
+  dailyMinor: number[];
+  vaultBalanceMinor: number;
+  antThresholdMinor: number;
+  ant: { count: number; totalMinor: number; byCategory: Record<string, { count: number; totalMinor: number }>; txnIds: string[] };
+}
+
+export interface Transaction {
+  txnId: string;
+  date: string;
+  amountMinor: number;
+  type: 'expense' | 'savings';
+  category: string;
+  description: string;
+  origin: 'manual' | 'sync' | 'csv' | 'vault';
+  accountId: string | null;
+}
+
+export interface Account {
+  accountId: string;
+  name: string;
+  type: 'checking' | 'credit_card' | 'savings';
+  source: 'simulated' | 'csv';
+  status: 'linked' | 'syncing' | 'synced' | 'failed';
+  lastSyncedAt: string | null;
+  failureReason: string | null;
+}
+
+export interface Job {
+  jobId: string;
+  status: 'awaiting_upload' | 'queued' | 'running' | 'succeeded' | 'failed';
+  imported: number;
+  skipped: number;
+  rejected: number;
+  failureReason?: string;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Polls a background import/sync job until it finishes (or ~2 minutes pass). */
+export async function waitForJob(jobId: string): Promise<Job> {
+  for (let i = 0; i < 60; i++) {
+    const job = await api<Job>('GET', `/api/jobs/${jobId}`);
+    if (job.status === 'succeeded' || job.status === 'failed') return job;
+    await sleep(2000);
+  }
+  throw new ApiError(504, 'timeout', 'Job still running');
 }

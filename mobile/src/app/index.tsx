@@ -6,6 +6,7 @@ import { Button, ErrorText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
 import { api, ApiError, type Summary } from '@/lib/api';
 import { formatCOP } from '@/lib/money';
+import { registerForPush } from '@/lib/push';
 import { t } from '@/strings';
 
 export default function Home() {
@@ -20,6 +21,7 @@ export default function Home() {
       if (!r.onboarded) return router.replace('/onboarding');
       setS(r);
       setError('');
+      registerForPush();
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) setError(t.common.genericError);
     }
@@ -69,6 +71,13 @@ export default function Home() {
               <Text style={styles.label}>{t.home.used(s.pctUsed)}</Text>
               {s.savingsGoalMinor > 0 && <Text style={styles.label}>{t.home.goal(formatCOP(s.savedMinor), formatCOP(s.savingsGoalMinor))}</Text>}
             </View>
+            <View style={styles.links}>
+              {(['dashboard', 'movements', 'accounts', 'vault'] as const).map((k) => (
+                <Pressable key={k} accessibilityRole="link" onPress={() => router.push(`/${k}`)} style={styles.link}>
+                  <Text style={styles.linkText}>{t.home.links[k]}</Text>
+                </Pressable>
+              ))}
+            </View>
           </>
         )}
       </ScrollView>
@@ -96,5 +105,18 @@ const styles = StyleSheet.create({
   bannerText: { color: Colors.text, fontSize: 16 },
   track: { height: 10, borderRadius: 5, backgroundColor: Colors.background, overflow: 'hidden' },
   fill: { height: '100%', backgroundColor: Colors.lightGreen },
+  links: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
+  link: {
+    flexGrow: 1,
+    flexBasis: '45%',
+    minHeight: 56,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderColor: Colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+  },
+  linkText: { color: Colors.accentText, fontSize: 16, fontWeight: '600' },
   footer: { padding: Spacing.three, paddingBottom: Spacing.five },
 });

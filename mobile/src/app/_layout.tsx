@@ -32,6 +32,10 @@ function Nav() {
         <Stack.Screen name="onboarding" options={{ title: t.onboarding.title, headerBackVisible: false, gestureEnabled: false }} />
         <Stack.Screen name="add" options={{ title: t.add.title, presentation: 'modal' }} />
         <Stack.Screen name="settings" options={{ title: t.settings.title }} />
+        <Stack.Screen name="dashboard" options={{ title: t.dashboard.title }} />
+        <Stack.Screen name="movements" options={{ title: t.movements.title }} />
+        <Stack.Screen name="accounts" options={{ title: t.accounts.title }} />
+        <Stack.Screen name="vault" options={{ title: t.vault.title }} />
       </Stack.Protected>
       <Stack.Protected guard={status === 'signedOut'}>
         <Stack.Screen name="sign-in" options={{ title: t.appName }} />
