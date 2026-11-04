@@ -76,8 +76,9 @@ Money is stored as integer minor units (`amountMinor`) in COP. Never use floats.
 
 ### F4 — Safe to spend today
 - **FR-4.1** `allowedMonthlySpend = Σ inflows(month) − savingsGoal(month)`.
-- **FR-4.2** `safeToSpendToday = (allowedMonthlySpend − spentThisMonth − vaultDepositsThisMonth) / daysLeftInMonth` (today counts as a day left).
-- **FR-4.3** If the value is ≤ 0, the home screen shows a red warning. The goal is at risk, and the screen shows the amount over.
+- **FR-4.2** `reserved = max(savingsGoal, savedThisMonth)` (saving more than the goal also leaves less to spend). `remaining = Σ inflows − reserved − spentThisMonth`. `dailyLimit = ⌊(remaining + spentToday) / daysLeftInMonth⌋`, fixed at the start of the day (today counts as a day left). `safeToSpendToday = dailyLimit − spentToday`. Implemented in `backend/src/lib/summary.ts`.
+- **FR-4.2a** Status: `over` when `remaining < 0`; `warning` when ≥ 80% of `allowedMonthlySpend` is used or today's spend exceeds the daily limit; otherwise `ok`. Dated goals contribute `⌈target / monthsLeft⌉` per month.
+- **FR-4.3** If `safeToSpendToday` ≤ 0, the home screen shows a red warning. The goal is at risk, and the screen shows the amount over.
 
 *Acceptance:* the value matches a hand calculation on 5 seeded scenarios. Unit test in `backend/tests/unit`.
 
@@ -132,7 +133,7 @@ Money is stored as integer minor units (`amountMinor`) in COP. Never use floats.
 
 | Integration | Use | Notes |
 |---|---|---|
-| Amazon Cognito | Auth | Amplify v6 `Auth` in RN (SRP). New mobile app client. Tokens stored in SecureStore. |
+| Amazon Cognito | Auth | SRP sign-in via `amazon-cognito-identity-js` (pure JS, so Expo Go works; Amplify v6 needs a dev build). New mobile app client with SRP + refresh only. Tokens stored in SecureStore. |
 | Belvo (sandbox) | Bank links, accounts, transactions, webhooks | Base URL `https://sandbox.belvo.com`. Secret ID/password stay server-side only (SSM). Connect widget runs in `react-native-webview`; the widget token comes from `POST /api/belvo/widget-token`. Webhook auth uses a shared `Authorization` header configured on the Belvo webhook. |
 | Expo Push API | Alert notifications | `https://exp.host/--/api/v2/push/send`, called with plain `fetch` from the forecast worker. Free. Expo handles FCM/APNs. |
 | EAS Build | iOS/Android builds | iOS build without a local Mac. Internal distribution for the usability tests. |
@@ -208,7 +209,7 @@ Existing routes are unchanged: `/me`, `/transactions`, `/accounts`, `/accounts/{
 
 - `mobile/` is created with `create-expo-app`, using Expo Router.
 - Screens: Auth, Consent, Onboarding (inflows → goal), Home (safe-to-spend, mascot, alerts, quick-add), Movimientos, Dashboard, Gemelo (projection + simulator), Cuentas (Belvo / CSV), Ajustes (vault, threshold, notifications, feedback, delete account).
-- Libraries, kept to a minimum: `aws-amplify` (Auth), `expo-secure-store`, `expo-notifications`, `react-native-webview`, `expo-document-picker` (CSV). A chart library only if the native views aren't enough.
+- Libraries, kept to a minimum: `amazon-cognito-identity-js` (SRP auth, with `expo-crypto` for secure random), `expo-secure-store`, `expo-notifications`, `react-native-webview`, `expo-document-picker` (CSV). A chart library only if the native views aren't enough.
 - All UI strings are in one `es-CO` strings file. No i18n framework until a second language is needed.
 - Colors follow the Capstone palette (white smoke background, green-yellow secondary, light green accents).
 

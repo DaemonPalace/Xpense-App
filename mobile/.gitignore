@@ -41,3 +41,7 @@ example
 # generated native folders
 /ios
 /android
+
+# local config (values from FinanceStack outputs)
+.env
+!.env.example

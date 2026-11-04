@@ -79,10 +79,10 @@ export class FinanceStack extends Stack {
       refreshTokenValidity: Duration.days(30),
       preventUserExistenceErrors: true,
     });
-    // Expo app signs in by calling Cognito's public API directly (USER_PASSWORD_AUTH over TLS), no Amplify.
+    // Expo app: SRP via amazon-cognito-identity-js, so the password never leaves the device.
     const mobileClient = userPool.addClient("MobileClient", {
       generateSecret: false,
-      authFlows: { userPassword: true },
+      authFlows: { userSrp: true },
       accessTokenValidity: Duration.minutes(60),
       idTokenValidity: Duration.minutes(60),
       refreshTokenValidity: Duration.days(30),
