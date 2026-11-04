@@ -2,7 +2,7 @@
 
 **Status**: Draft · **Created**: 2026-11-04 · **Platforms**: Android, iOS (Expo / React Native) · **UI language**: Spanish (es-CO)
 
-**Team**: Escalona (UX/UI, QA) · Aponte (backend: API, goals, alerts, vault) · Rodríguez (Belvo integration, categorization) · Gutiérrez (architecture, auth, digital twin) · Prieto (mobile frontend, design system, dashboard, mascot)
+**Team**: Escalona (UX/UI, QA) · Aponte (backend: API, goals, alerts, vault) · Rodríguez (bank aggregator integration, categorization) · Gutiérrez (architecture, auth, digital twin) · Prieto (mobile frontend, design system, dashboard, mascot)
 
 **Schedule**: D1 28/10 · D2 04/11 · D3 11/11 (source: `../Cronograma_MVP_Xpense.xlsx`, `../checklist_MVP.xlsx`)
 
@@ -37,7 +37,7 @@ Universidad de La Sabana students are managing money on their own for the first 
 | F2 | Onboarding: monthly inflows + savings goal | D1 | Must |
 | F3 | Quick manual expense entry (≤ 3 taps) with categories | D1 | Must |
 | F4 | Safe-to-spend today / daily limit | D1 | Must |
-| F5 | Belvo sandbox connection: read test transactions | D1 | Must |
+| F5 | Bank connection: test bank now, aggregator sandbox when access is granted (§11) | D1 | Must |
 | F6 | Link account + background sync, de-dup against manual entries | D2 | Must |
 | F7 | CSV statement import (fallback when bank unsupported) | D2 | Must |
 | F8 | Dashboard: spend by category, weekly cumulative, goal progress | D2 | Must |
@@ -59,7 +59,7 @@ Money is stored as integer minor units (`amountMinor`) in COP. Never use floats.
 ### F1 — Account and consent
 - **FR-1.1** Sign up with email and password, with email verified by a one-time code. The Cognito password policy is reused.
 - **FR-1.2** Before the first data write, the user accepts the data-processing policy (Habeas Data, Ley 1581 de 2012). Store `consentVersion` and `consentAt` on the profile. The API rejects writes with `403 consent_required` until consent is recorded.
-- **FR-1.3** Users can sign out, reset their password, and delete their account. Deleting removes all items under `USER#<sub>` and revokes any Belvo link.
+- **FR-1.3** Users can sign out, reset their password, and delete their account. Deleting removes all items under `USER#<sub>` and revokes any aggregator link.
 - **FR-1.4** A user can only ever read or write their own data. This is already enforced by `PK = USER#<sub>` from the verified token.
 
 *Acceptance:* a new user signs up, accepts consent and logs their first expense in under 3 minutes.
@@ -82,13 +82,16 @@ Money is stored as integer minor units (`amountMinor`) in COP. Never use floats.
 
 *Acceptance:* the value matches a hand calculation on 5 seeded scenarios. Unit test in `backend/tests/unit`.
 
-### F5, F6 — Belvo bank connection (sandbox)
-- **FR-6.1** The user taps "Conectar banco". The app opens the Belvo Connect widget in a WebView using a short-lived access token issued by the backend. The user picks a sandbox institution and logs in with sandbox credentials.
-- **FR-6.2** On success, the backend stores only the `belvoLinkId`, institution and account metadata, **never bank credentials**. Account status starts as `syncing`.
-- **FR-6.3** The historical transactions fetch runs in the background (existing ingest queue). Status changes to `synced` or `failed` with a plain-language reason and a retry option.
-- **FR-6.4** Belvo webhooks (`TRANSACTIONS` / `historical_update`, `new_transactions_available`) trigger incremental syncs.
-- **FR-6.5** No duplicates after repeated syncs. Fingerprints come from the existing `lib/dedupe.ts`. A bank transaction that matches a manual entry (same amount, date ± 1 day, same category or merchant) is flagged as a possible duplicate, and the user picks which one to keep.
-- **FR-6.6** Unlinking deletes the Belvo link (API `DELETE /api/links/{id}`). The user chooses whether to keep or delete the imported transactions (existing behavior).
+### F5, F6 — Bank connection
+
+**Aggregator status (2026-11-04):** Belvo's current docs offer banking aggregation for Brazil only; no Colombian sandbox exists. No self-serve Colombian alternative was found either: Prometeo's docs are password-protected, and Floid issues sandbox credentials only through its sales team. Until sandbox access is granted, "connect" uses the built-in **test bank** (`source: simulated`). It generates 6 months of realistic COP student transactions (local merchants) deterministically through the same link → background sync → de-dup flow. A real provider then plugs into the ingest worker as one more `source`. See §11.
+
+- **FR-6.1** The user taps "Conectar cuenta de prueba" (debit or credit card). The account is created with status `syncing` and the sync runs in the background (existing ingest queue). *(Aggregator: open the provider's connect widget instead; the backend stores only the provider link id, **never bank credentials**.)*
+- **FR-6.2** Status changes to `synced` or `failed` with a plain-language reason and a retry option. The app polls the job and shows imported / duplicate / rejected counts.
+- **FR-6.3** No duplicates after repeated syncs. Fingerprints come from `lib/dedupe.ts`.
+- **FR-6.4** *(Aggregator only)* Provider webhooks trigger incremental syncs.
+- **FR-6.5** *(Deferred)* A bank transaction matching a manual entry (same amount, date ± 1 day, same category) is flagged as a possible duplicate for the user to resolve.
+- **FR-6.6** Unlinking deletes the account. The user chooses whether to keep or delete its imported transactions.
 
 ### F7 — CSV import
 - **FR-7.1** Reuse the existing CSV flow (`date,description,amount[,category]`, ≤ 5 MB / 10,000 rows) with a summary of imported, skipped and rejected rows. Imported rows are categorized.
@@ -98,7 +101,7 @@ Money is stored as integer minor units (`amountMinor`) in COP. Never use floats.
 - **FR-8.2** Every number links to the transactions behind it.
 
 ### F9 — Categorization and ant expenses
-- **FR-9.1** Belvo transactions use Belvo's `category` mapped to app categories. Fallback is the keyword categorizer (`lib/categorize.ts`, extended with local merchants such as "Rappi", "Uber", "DiDi", "Juan Valdez", "Oma", "Parqueadero"). Manual recategorization is remembered per merchant.
+- **FR-9.1** Transactions are categorized by the keyword categorizer (an aggregator's own category, when there is one, is mapped first) (`lib/categorize.ts`, extended with local merchants such as "Rappi", "Uber", "DiDi", "Juan Valdez", "Oma", "Parqueadero"). Manual recategorization is remembered per merchant.
 - **FR-9.2** *Ant expense*: a transaction with `amountMinor < antThreshold` (default COP 15,000, user-adjustable) in a category or merchant that appears ≥ 3 times in a rolling 7 days.
 - *Acceptance:* ≥ 80% of the labeled test set (≥ 50 sandbox and seeded transactions) is categorized correctly.
 
@@ -134,8 +137,8 @@ Money is stored as integer minor units (`amountMinor`) in COP. Never use floats.
 | Integration | Use | Notes |
 |---|---|---|
 | Amazon Cognito | Auth | SRP sign-in via `amazon-cognito-identity-js` (pure JS, so Expo Go works; Amplify v6 needs a dev build). New mobile app client with SRP + refresh only. Tokens stored in SecureStore. |
-| Belvo (sandbox) | Bank links, accounts, transactions, webhooks | Base URL `https://sandbox.belvo.com`. Secret ID/password stay server-side only (SSM). Connect widget runs in `react-native-webview`; the widget token comes from `POST /api/belvo/widget-token`. Webhook auth uses a shared `Authorization` header configured on the Belvo webhook. |
-| Expo Push API | Alert notifications | `https://exp.host/--/api/v2/push/send`, called with plain `fetch` from the forecast worker. Free. Expo handles FCM/APNs. |
+| Bank aggregator (pending, §11) | Bank links, transactions, webhooks | Built-in test bank until a Colombian sandbox is granted. Provider secrets go in SSM Parameter Store; the connect widget runs in `react-native-webview`; webhooks use a shared secret header. |
+| Expo Push API | Alert notifications | `https://exp.host/--/api/v2/push/send`, called with plain `fetch` from the forecast worker. Free. Expo handles FCM/APNs. Needs a dev build and an EAS project id (`eas init`); Expo Go on Android can't receive remote push since SDK 53, so the home banner is the fallback. |
 | EAS Build | iOS/Android builds | iOS build without a local Mac. Internal distribution for the usability tests. |
 
 ## 5. Architecture and infrastructure changes
@@ -144,9 +147,9 @@ The existing `FinanceStack` (us-east-1, CDK in `infra/stack.ts`) is kept. Change
 
 ```
 Expo app ─▶ CloudFront /api/* ─▶ Lambda URL (api) ─▶ DynamoDB FinanceTable
-Belvo ──webhook──▶ CloudFront /api/webhooks/belvo ─┘        │ stream
+                                                   │ stream
                                     stream-router ◀─────────┘
-                                    ├─▶ ingest-queue   ─▶ ingest-worker   (Belvo / simulator / CSV, de-dup)
+                                    ├─▶ ingest-queue   ─▶ ingest-worker   (test bank / CSV / aggregator later, de-dup)
                                     └─▶ forecast-queue ─▶ forecast-worker (aggregates, twin, alerts, Expo push)
 EventBridge Scheduler (daily) ─▶ forecast-worker (refresh, streaks)
 ```
@@ -154,9 +157,9 @@ EventBridge Scheduler (daily) ─▶ forecast-worker (refresh, streaks)
 | # | Change | Where |
 |---|---|---|
 | I1 | Add a Cognito `UserPoolMobileClient` (no secret, SRP + refresh). The JWT verifier accepts both clients (`clientId: [web, mobile]`). | `infra/stack.ts`, `backend/src/lib/auth.ts` |
-| I2 | Belvo secrets in SSM Parameter Store SecureString: `/xpense/belvo/secret-id`, `/xpense/belvo/secret-password`, `/xpense/belvo/webhook-token`. Read-only IAM for the api and ingest-worker. Secrets Manager is not used because it costs $0.40/secret/month. | `infra/stack.ts` |
-| I3 | `POST /api/webhooks/belvo` route on the existing API Lambda. It bypasses Cognito, checks the webhook token with a timing-safe comparison, and writes a sync job that stream-router sends to ingest-queue. No new Lambda. | `backend/src/api.ts` |
-| I4 | Ingest worker gains source `belvo`: it pages `/api/transactions/?link=` from Belvo and maps the results to transactions. The simulator stays for offline demos. | `backend/src/ingest-worker.ts`, new `backend/src/lib/belvo.ts` |
+| I2 *(deferred, §11)* | Belvo secrets in SSM Parameter Store SecureString: `/xpense/belvo/secret-id`, `/xpense/belvo/secret-password`, `/xpense/belvo/webhook-token`. Read-only IAM for the api and ingest-worker. Secrets Manager is not used because it costs $0.40/secret/month. | `infra/stack.ts` |
+| I3 *(deferred, §11)* | `POST /api/webhooks/belvo` route on the existing API Lambda. It bypasses Cognito, checks the webhook token with a timing-safe comparison, and writes a sync job that stream-router sends to ingest-queue. No new Lambda. | `backend/src/api.ts` |
+| I4 *(deferred; test bank in place)* | Ingest worker gains source `belvo`: it pages `/api/transactions/?link=` from Belvo and maps the results to transactions. The simulator stays for offline demos. | `backend/src/ingest-worker.ts`, new `backend/src/lib/belvo.ts` |
 | I5 | Forecast worker computes the twin projection, evaluates alert thresholds, writes `ALERT#` items and sends Expo push. Daily mode also updates `STREAK`. | `backend/src/forecast-worker.ts` |
 | I6 | Old web SPA removed. The CloudFront and SiteBucket deployment now ships only a static `privacy.html` (privacy policy and terms, needed for Ley 1581 and the app stores). | `infra/stack.ts`, new `site/` |
 | I7 | Enable DynamoDB point-in-time recovery. Needed for the backup and recovery checklist item; the restore test is in activity 3.6. Cost ≈ $0 at MVP size. | `infra/stack.ts` |
@@ -178,13 +181,13 @@ Single table, `PK = USER#<sub>`:
 | Inflow | `INCOME#<id>` | `name, kind (allowance/salary/scholarship/other), amountMinor, dayOfMonth` |
 | Goal | `GOAL#<id>` | `name, targetMinor, targetDate?, monthly (bool)` |
 | Vault | `VAULT` | `balanceMinor` (movements are `savings` transactions with `vault=true`) |
-| Account (extended) | `ACCT#<id>` | `source + "belvo", belvoLinkId, institution` |
+| Account | `ACCT#<id>` | `source` = `simulated` (test bank) or `csv`; an aggregator adds its own source and link id |
 | Device | `DEVICE#<expoPushToken>` | `platform, createdAt` |
 | Alert | `ALERT#<yyyy-mm>#<kind>` | `kind (pct80/pct100/daily#<date>), firedAt, message` (the SK makes each alert fire once) |
 | Streak | `STREAK` | `current, best, lastEvaluatedDate, weeklyChallenge{id, progress}` |
 | Twin | `FORECAST` (extended) | `+ projectedMonthEndSavingsMinor, status (on_track/at_risk/off_track)` |
 | Feedback | `FEEDBACK#<ts>` | `message, appVersion, screenshotKey?` |
-| Belvo link index | `PK=BELVOLINK#<linkId>`, `SK=USER` | `sub`. Lets a webhook be resolved to its user without a scan. |
+| Link index *(aggregator)* | `PK=LINK#<linkId>`, `SK=USER` | `sub`. Lets a webhook be resolved to its user without a scan. |
 
 ## 7. API deltas
 
@@ -198,9 +201,9 @@ All routes are under `/api`, require a Cognito token (except webhooks), and are 
 | POST | `/vault/deposit`, `/vault/withdraw` | Vault movements |
 | GET | `/summary` | Safe-to-spend, month totals, alerts, twin status, mascot mood, streak (single home-screen call) |
 | POST/DELETE | `/devices[/{token}]` | Register or unregister a push token |
-| POST | `/belvo/widget-token` | Short-lived Connect widget token |
-| POST | `/belvo/links` | Register a link created in the widget, which starts the sync |
-| POST | `/webhooks/belvo` | Belvo webhook (token-authenticated) |
+| GET | `/vault` | Vault balance |
+| PATCH | `/me` | Also accepts `antThresholdMinor` |
+| — | aggregator routes | Widget token, link registration and webhook, once a provider is chosen (§11) |
 | POST | `/feedback` | Bug report |
 
 Existing routes are unchanged: `/me`, `/transactions`, `/accounts`, `/accounts/{id}/sync`, `/imports`, `/jobs/{id}`, `/insights`. See `specs/001-serverless-finance-tracker/contracts/openapi.yaml`.
@@ -208,17 +211,17 @@ Existing routes are unchanged: `/me`, `/transactions`, `/accounts`, `/accounts/{
 ## 8. Mobile app (Expo)
 
 - `mobile/` is created with `create-expo-app`, using Expo Router.
-- Screens: Auth, Consent, Onboarding (inflows → goal), Home (safe-to-spend, mascot, alerts, quick-add), Movimientos, Dashboard, Gemelo (projection + simulator), Cuentas (Belvo / CSV), Ajustes (vault, threshold, notifications, feedback, delete account).
+- Screens: Auth, Consent, Onboarding (inflows → goal), Home (safe-to-spend, mascot, alerts, quick-add), Movimientos, Dashboard, Gemelo (projection + simulator), Cuentas (test bank / CSV), Ajustes (vault, threshold, notifications, feedback, delete account).
 - Libraries, kept to a minimum: `amazon-cognito-identity-js` (SRP auth, with `expo-crypto` for secure random), `expo-secure-store`, `expo-notifications`, `react-native-webview`, `expo-document-picker` (CSV). A chart library only if the native views aren't enough.
 - All UI strings are in one `es-CO` strings file. No i18n framework until a second language is needed.
 - Colors follow the Capstone palette (white smoke background, green-yellow secondary, light green accents).
 
 ## 9. Non-functional requirements
 
-- **NFR-1 Cost**: stay within the AWS free tier; the existing Budget alarm is the backstop. Belvo sandbox is free.
+- **NFR-1 Cost**: stay within the AWS free tier; the existing Budget alarm is the backstop.
 - **NFR-2 Security**:
   - No bank credentials are stored.
-  - Belvo secrets live only in SSM.
+  - Aggregator secrets will live only in SSM.
   - Tokens are kept in SecureStore.
   - Logs never contain tokens, amounts tied to an email, or account numbers (existing `lib/log.ts` rules).
 - **NFR-3 Privacy**: Ley 1581 consent, a privacy policy URL, and account deletion that removes all data.
@@ -233,13 +236,14 @@ Existing routes are unchanged: `/me`, `/transactions`, `/accounts`, `/accounts/{
 - SC-2: An expense is logged in ≤ 3 taps (observed in usability tests).
 - SC-3: Categorization is ≥ 80% correct on the labeled test set.
 - SC-4: 80% and 100% alerts fire exactly once per month in seeded scenarios. Daily alerts fire once per day.
-- SC-5: Zero duplicates after repeated Belvo syncs and webhook deliveries.
+- SC-5: Zero duplicates after repeated syncs, re-imports and (later) webhook deliveries.
 - SC-6: The twin projection stays within 20% of actual month-end savings for seeded 6-month histories.
 
 ## 11. Risks and open questions
 
-- **Belvo Colombia sandbox coverage**: confirm which `erebor_co_*` test institutions return transactions. The fallback is the Mexican sandbox institutions, relabeled for the demo.
-- **Connect widget in a WebView**: confirm that the success callback (redirect or `postMessage`) is caught reliably on iOS and Android. The fallback is opening it in the system browser with a deep link (`xpense://belvo`).
+- **No Colombian aggregator sandbox (confirmed 2026-11-04)**: Belvo now documents banking aggregation for Brazil only. Prometeo (docs password-protected) and Floid (sandbox via sales) both require contacting them. **Action for Rodríguez:** request sandbox access from Prometeo and Floid. Whichever answers first gets the I2–I4 work, as a new ingest `source`. Until then the test bank covers the demo.
+- **Connect widget in a WebView** (once an aggregator is chosen): confirm that the success callback (redirect or `postMessage`) is caught reliably on iOS and Android. The fallback is opening it in the system browser with a deep link (`xpense://bank`).
+- **Push needs a dev build**: run `eas init` (Expo account) and build a development client. Until then alerts show in the app only.
 - **iOS distribution** needs an Apple developer account for EAS internal builds. The fallback is Expo Go for demos.
 - **Ant-expense threshold** (COP 15,000 default) should be validated with students in the usability tests.
 - **Live stack drift**: the deployed `FinanceStack` was deployed with `smoke`, `allowPoison` and SPA context flags. Running `cdk diff` from this repo currently shows those as removals. The next deploy should be intentional (I6, I8).
