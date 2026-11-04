@@ -2,7 +2,8 @@ import { ulid } from "ulid";
 import { validateAmount } from "./money";
 import { txnSk, userPk, type Item } from "./db";
 
-export const CATEGORIES = ["housing", "food", "transport", "utilities", "entertainment", "health", "shopping", "savings", "other"] as const;
+// Student-oriented set (requirements.md FR-3.2). UI labels live in mobile/src/strings.ts.
+export const CATEGORIES = ["food", "snacks", "transport", "rideshare", "parking", "outings", "academic", "shopping", "health", "housing", "subscriptions", "savings", "other"] as const;
 export type Category = (typeof CATEGORIES)[number];
 export type TxnType = "expense" | "savings";
 export type Origin = "manual" | "sync" | "csv";

@@ -1,4 +1,5 @@
-export const MAX_ABS_MINOR = 100_000_000;
+// 1,000,000,000 COP in minor units: COP amounts are large (a laptop is ~3,000,000).
+export const MAX_ABS_MINOR = 100_000_000_000;
 
 /** Decimal string → integer minor units without float math. Throws on bad input. */
 export function parseAmount(str: string): number {

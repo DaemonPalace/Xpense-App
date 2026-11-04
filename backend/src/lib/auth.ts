@@ -22,7 +22,7 @@ export async function requireUser(headers: Record<string, string | undefined>): 
   if (!m) throw new HttpError(401, "unauthorized", "Missing token");
   verifier ??= CognitoJwtVerifier.create({
     userPoolId: process.env.USER_POOL_ID!,
-    clientId: process.env.CLIENT_ID!,
+    clientId: process.env.CLIENT_ID!.split(","),
     tokenUse: "access",
   }) as any;
   try {

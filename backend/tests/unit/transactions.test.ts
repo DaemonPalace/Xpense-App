@@ -13,7 +13,7 @@ describe("validateTransactionInput", () => {
   it("rejects invalid fields", () => {
     expect(validateTransactionInput({ ...ok, date: "2026-02-30" }, now)).toHaveProperty("date");
     expect(validateTransactionInput({ ...ok, amountMinor: 0 }, now)).toHaveProperty("amountMinor");
-    expect(validateTransactionInput({ ...ok, amountMinor: 100_000_001 }, now)).toHaveProperty("amountMinor");
+    expect(validateTransactionInput({ ...ok, amountMinor: 100_000_000_001 }, now)).toHaveProperty("amountMinor");
     expect(validateTransactionInput({ ...ok, type: "income" }, now)).toHaveProperty("type");
     expect(validateTransactionInput({ ...ok, category: "travel" }, now)).toHaveProperty("category");
     expect(validateTransactionInput({ ...ok, description: "" }, now)).toHaveProperty("description");

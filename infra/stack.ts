@@ -17,7 +17,6 @@ import * as sources from "aws-cdk-lib/aws-lambda-event-sources";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
-import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
@@ -38,6 +37,7 @@ export class FinanceStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
     const alertEmail: string | undefined = this.node.tryGetContext("alertEmail");
+    if (!alertEmail) throw new Error("Missing context: -c alertEmail=<operator email> (alarms and budget need a real address)");
     const smoke = this.node.tryGetContext("smoke") === "true";
     const allowPoison = this.node.tryGetContext("allowPoison") === "true";
 
@@ -79,9 +79,18 @@ export class FinanceStack extends Stack {
       refreshTokenValidity: Duration.days(30),
       preventUserExistenceErrors: true,
     });
+    // Expo app signs in by calling Cognito's public API directly (USER_PASSWORD_AUTH over TLS), no Amplify.
+    const mobileClient = userPool.addClient("MobileClient", {
+      generateSecret: false,
+      authFlows: { userPassword: true },
+      accessTokenValidity: Duration.minutes(60),
+      idTokenValidity: Duration.minutes(60),
+      refreshTokenValidity: Duration.days(30),
+      preventUserExistenceErrors: true,
+    });
 
     const alerts = new sns.Topic(this, "Alerts");
-    if (alertEmail) alerts.addSubscription(new subs.EmailSubscription(alertEmail));
+    alerts.addSubscription(new subs.EmailSubscription(alertEmail));
 
     // ---------- queues ----------
     const dlq = (name: string) => new sqs.Queue(this, name, { retentionPeriod: Duration.days(14), enforceSSL: true });
@@ -128,7 +137,7 @@ export class FinanceStack extends Stack {
     const secret = originSecret(this);
     const api = fn("Api", "api.ts", Duration.seconds(10), {
       USER_POOL_ID: userPool.userPoolId,
-      CLIENT_ID: userPoolClient.userPoolClientId,
+      CLIENT_ID: `${userPoolClient.userPoolClientId},${mobileClient.userPoolClientId}`,
       ORIGIN_SECRET: secret,
       INGEST_QUEUE_URL: ingestQueue.queueUrl,
       UPLOAD_BUCKET: uploadBucket.bucketName,
@@ -213,17 +222,6 @@ export class FinanceStack extends Stack {
       },
     });
 
-    const dist = join(ROOT, "frontend/dist");
-    if (existsSync(dist)) {
-      new s3deploy.BucketDeployment(this, "DeploySite", {
-        destinationBucket: siteBucket,
-        distribution,
-        sources: [
-          s3deploy.Source.asset(dist),
-          s3deploy.Source.jsonData("config.json", { region: this.region, userPoolId: userPool.userPoolId, clientId: userPoolClient.userPoolClientId }),
-        ],
-      });
-    }
 
     // ---------- alarms (9 alarm metrics of the 10 free, research R13) ----------
     const action = new cwActions.SnsAction(alerts);
@@ -272,7 +270,7 @@ export class FinanceStack extends Stack {
     }).addAlarmAction(action);
 
     // ---------- cost ----------
-    if (alertEmail) {
+    {
       const subscribers = [{ subscriptionType: "EMAIL", address: alertEmail }];
       new budgets.CfnBudget(this, "CostBudget", {
         budget: { budgetType: "COST", timeUnit: "MONTHLY", budgetLimit: { amount: 0.1, unit: "USD" } },
@@ -286,6 +284,7 @@ export class FinanceStack extends Stack {
     new CfnOutput(this, "SiteUrl", { value: `https://${distribution.distributionDomainName}` });
     new CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });
     new CfnOutput(this, "UserPoolClientId", { value: userPoolClient.userPoolClientId });
+    new CfnOutput(this, "MobileClientId", { value: mobileClient.userPoolClientId });
     new CfnOutput(this, "IngestDlqArn", { value: ingestDlq.queueArn });
     new CfnOutput(this, "FunctionUrl", { value: apiUrl.url, description: "Direct calls are rejected (403); use SiteUrl/api" });
   }

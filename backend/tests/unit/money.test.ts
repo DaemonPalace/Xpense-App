@@ -15,8 +15,8 @@ describe("money", () => {
   });
   it("validates range", () => {
     expect(validateAmount(0)).not.toBeNull();
-    expect(validateAmount(100_000_001)).not.toBeNull();
-    expect(validateAmount(-100_000_000)).toBeNull();
+    expect(validateAmount(100_000_000_001)).not.toBeNull();
+    expect(validateAmount(-100_000_000_000)).toBeNull();
     expect(validateAmount(1.5)).not.toBeNull();
   });
 });

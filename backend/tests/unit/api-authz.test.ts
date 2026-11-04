@@ -15,7 +15,7 @@ beforeEach(() => {
   vi.spyOn(ddb, "send").mockImplementation(async (cmd: any) => {
     calls.push(cmd.input);
     const name = cmd.constructor.name;
-    if (name === "GetCommand") return cmd.input.Key.SK === "PROFILE" ? { Item: { PK: "USER#B", SK: "PROFILE", lastActiveAt: new Date().toISOString() } } : {};
+    if (name === "GetCommand") return cmd.input.Key.SK === "PROFILE" ? { Item: { PK: "USER#B", SK: "PROFILE", consentVersion: "v1", lastActiveAt: new Date().toISOString() } } : {};
     if (name === "TransactWriteCommand" && cmd.input.TransactItems.some((t: any) => t.Delete?.ConditionExpression)) {
       throw Object.assign(new Error("cancelled"), { name: "TransactionCanceledException" });
     }

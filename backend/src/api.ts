@@ -8,6 +8,8 @@ import { ulid } from "ulid";
 import { HttpError, requireOrigin, requireUser } from "./lib/auth";
 import { acctSk, activePk, aggSk, ddb, forecastSk, jobSk, profileSk, queryAll, TABLE, txnSk, userPk, type Item } from "./lib/db";
 import { errorFields, log, withCorrelation } from "./lib/log";
+import { MAX_ABS_MINOR } from "./lib/money";
+import { localToday, summarize } from "./lib/summary";
 import { toDto, toItem, validateTransactionInput, type TransactionInput } from "./lib/transactions";
 
 const sqs = new SQSClient({});
@@ -43,7 +45,7 @@ async function getItem(PK: string, SK: string): Promise<Item | undefined> {
 async function touchProfile(ctx: Ctx): Promise<Item> {
   let profile = await getItem(pk(ctx), profileSk());
   if (!profile) {
-    profile = { PK: pk(ctx), SK: profileSk(), email: ctx.user.email ?? null, displayName: "", currency: "USD", createdAt: now(), hasTransactions: false };
+    profile = { PK: pk(ctx), SK: profileSk(), email: ctx.user.email ?? null, displayName: "", currency: "COP", createdAt: now(), hasTransactions: false };
     await ddb.send(new PutCommand({ TableName: TABLE, Item: profile, ConditionExpression: "attribute_not_exists(PK)" })).catch((e) => {
       if (!isConditionFail(e)) throw e;
     });
@@ -82,6 +84,61 @@ function txnInput(body: any): TransactionInput {
 function requireDate(q: string | undefined): string {
   if (!q || !/^\d{4}-\d{2}-\d{2}$/.test(q)) throw badRequest("date query parameter is required (YYYY-MM-DD)");
   return q;
+}
+
+const isName = (v: unknown) => typeof v === "string" && v.trim().length >= 1 && v.length <= 60;
+const isPositiveAmount = (v: unknown) => Number.isInteger(v) && (v as number) > 0 && (v as number) <= MAX_ABS_MINOR;
+const INCOME_KINDS = ["allowance", "salary", "scholarship", "other"];
+
+function incomeInput(b: any) {
+  if (!isName(b?.name)) throw badRequest("name must be 1–60 chars");
+  if (!INCOME_KINDS.includes(b.kind)) throw badRequest(`kind must be one of ${INCOME_KINDS.join(", ")}`);
+  if (!isPositiveAmount(b.amountMinor)) throw badRequest("amountMinor must be a positive integer");
+  const dayOfMonth = b.dayOfMonth ?? 1;
+  if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) throw badRequest("dayOfMonth must be 1–31");
+  return { name: b.name.trim(), kind: b.kind, amountMinor: b.amountMinor, dayOfMonth };
+}
+
+function goalInput(b: any) {
+  if (!isName(b?.name)) throw badRequest("name must be 1–60 chars");
+  if (!isPositiveAmount(b.targetMinor)) throw badRequest("targetMinor must be a positive integer");
+  if (typeof b.monthly !== "boolean") throw badRequest("monthly must be a boolean");
+  if (!b.monthly && (typeof b.targetDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(b.targetDate))) throw badRequest("targetDate (YYYY-MM-DD) is required for non-monthly goals");
+  return { name: b.name.trim(), targetMinor: b.targetMinor, monthly: b.monthly, targetDate: b.monthly ? null : b.targetDate };
+}
+
+const plainDto = ({ PK, SK, ...x }: Item) => x;
+
+/** List/create/update/delete for small per-user collections stored as `<prefix><id>`. */
+function crud(path: string, prefix: string, input: (body: any) => Record<string, unknown>): [string, string, Handler][] {
+  return [
+    ["GET", path, async (ctx) => ({ status: 200, body: (await queryAll(pk(ctx), prefix)).map(plainDto) })],
+    ["POST", path, async (ctx) => {
+      const fields = input(ctx.body);
+      await touchProfile(ctx);
+      const id = ulid();
+      const item = { PK: pk(ctx), SK: prefix + id, id, ...fields, createdAt: now(), updatedAt: now() };
+      await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
+      return { status: 201, body: plainDto(item) };
+    }],
+    ["PUT", `${path}/:id`, async (ctx) => {
+      const fields = input(ctx.body);
+      const existing = await getItem(pk(ctx), prefix + ctx.params.id);
+      if (!existing) throw notFound();
+      const item = { ...existing, ...fields, updatedAt: now() };
+      await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
+      return { status: 200, body: plainDto(item) };
+    }],
+    ["DELETE", `${path}/:id`, async (ctx) => {
+      try {
+        await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: pk(ctx), SK: prefix + ctx.params.id }, ConditionExpression: "attribute_exists(SK)" }));
+      } catch (e) {
+        if (isConditionFail(e)) throw notFound();
+        throw e;
+      }
+      return { status: 204 };
+    }],
+  ];
 }
 
 const accountDto = ({ PK, SK, lastCorrelationId, ...a }: Item) => a;
@@ -137,6 +194,21 @@ const routes: [string, string, Handler][] = [
     );
     const { PK, SK, ...p } = res.Attributes!;
     return { status: 200, body: p };
+  }],
+  ["POST", "/api/me/consent", async (ctx) => {
+    const version = ctx.body?.version;
+    if (typeof version !== "string" || !/^[\w.-]{1,20}$/.test(version)) throw badRequest("version must be 1–20 chars [A-Za-z0-9_.-]");
+    await touchProfile(ctx);
+    const res = await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE,
+        Key: { PK: pk(ctx), SK: profileSk() },
+        UpdateExpression: "SET consentVersion = :v, consentAt = :t",
+        ExpressionAttributeValues: { ":v": version, ":t": now() },
+        ReturnValues: "ALL_NEW",
+      }),
+    );
+    return { status: 200, body: plainDto(res.Attributes!) };
   }],
   ["DELETE", "/api/me", async (ctx) => {
     // Always async: deleting thousands of items at 25 WCU exceeds the API timeout.
@@ -335,6 +407,29 @@ const routes: [string, string, Handler][] = [
     return { status: 200, body: jobDto(job) };
   }],
 
+  // ---- budget: inflows, goals, safe to spend ----
+  ...crud("/api/incomes", "INCOME#", incomeInput),
+  ...crud("/api/goals", "GOAL#", goalInput),
+  ["GET", "/api/summary", async (ctx) => {
+    const today = localToday();
+    const [profile, incomes, goals, txns] = await Promise.all([
+      touchProfile(ctx),
+      queryAll(pk(ctx), "INCOME#"),
+      queryAll(pk(ctx), "GOAL#"),
+      queryAll(pk(ctx), `TXN#${today.slice(0, 7)}-`, { ProjectionExpression: "#d, amountMinor, #t", ExpressionAttributeNames: { "#d": "date", "#t": "type" } }),
+    ]);
+    return {
+      status: 200,
+      body: {
+        today,
+        currency: profile.currency,
+        consented: Boolean(profile.consentVersion),
+        onboarded: incomes.length > 0,
+        ...summarize(today, incomes as any[], goals as any[], txns as any[]),
+      },
+    };
+  }],
+
   // ---- insights ----
   ["GET", "/api/insights", async (ctx) => {
     const [profile, aggs, fc] = await Promise.all([touchProfile(ctx), queryAll(pk(ctx), "AGG#"), getItem(pk(ctx), forecastSk())]);
@@ -350,6 +445,9 @@ const routes: [string, string, Handler][] = [
     return { status: 200, body: { months, forecast, processing } };
   }],
 ];
+
+// Writes need Habeas Data consent first (FR-1.2); consenting and deleting the account do not.
+const CONSENT_EXEMPT = new Set(["POST /api/me/consent", "DELETE /api/me"]);
 
 const compiled = routes.map(([method, path, handler]) => {
   const names: string[] = [];
@@ -376,6 +474,10 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     for (const r of compiled) {
       const m = r.method === method && r.re.exec(path);
       if (!m) continue;
+      if (method !== "GET" && !CONSENT_EXEMPT.has(`${method} ${r.path}`)) {
+        const profile = await getItem(userPk(user.sub), profileSk());
+        if (!profile?.consentVersion) throw new HttpError(403, "consent_required", "Accept the data processing policy first");
+      }
       const params = Object.fromEntries(r.names.map((n, i) => [n, decodeURIComponent(m[i + 1])]));
       let body: unknown;
       if (event.body) {
