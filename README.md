@@ -8,7 +8,7 @@ the outcome with a digital twin wallet. Spec: [`requirements.md`](requirements.m
 
 | Path | What |
 |---|---|
-| `mobile/` | Expo / React Native app (Android, iOS) — not created yet |
+| `mobile/` | Expo / React Native app (Android, iOS). `cd mobile && npm install && npx expo start` |
 | `backend/` | Lambda handlers (api, stream-router, ingest-worker, forecast-worker) + unit tests |
 | `infra/` | AWS CDK stack `FinanceStack` |
 | `specs/001-serverless-finance-tracker/` | Original backend spec, data model, OpenAPI contract |
