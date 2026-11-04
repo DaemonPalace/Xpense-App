@@ -1,0 +1,22 @@
+date,description,amount,category
+2026-09-01,Rent payment,1400.00,housing
+2026-09-02,Grocery Market,82.15,
+2026-09-03,Corner Cafe,4.50,
+2026-09-03,Corner Cafe,4.50,
+2026-09-05,Electric utility bill,85.00,
+2026-09-07,Shell Gas Station fuel,48.20,
+2026-09-09,"Restaurant ""Luigi's"", dinner",64.00,food
+2026-09-10,Netflix subscription,15.99,
+2026-09-12,Amazon order,39.99,
+2026-09-14,City Pharmacy,12.30,
+2026-09-15,Transfer to savings,300.00,savings
+2026-09-18,Uber trip,17.80,
+2026-09-20,Water bill,35.00,
+2026-09-22,Grocery Market,95.40,
+2026-09-25,Amazon order refund,-39.99,shopping
+2026-09-27,Cinema tickets,24.00,
+2026-09-31,Bad date row,10.00,
+2026-09-29,Mystery charge,9.99,
+2026-09-30,Grocery Market,71.05,
+2026-09-30,Corner Cafe,4.50,
+2026-09-30,Corner Cafe,4.50,

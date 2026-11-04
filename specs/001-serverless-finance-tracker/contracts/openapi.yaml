@@ -1,0 +1,159 @@
+openapi: 3.1.0
+info:
+  title: Finance Tracker API
+  version: 1.0.0
+  description: |
+    Served at https://<cloudfront-domain>/api/*. Every request requires
+    `Authorization: Bearer <Cognito access token>`. Optional `x-correlation-id` header is echoed
+    back and propagated to all downstream processing. All amounts are integer minor units.
+    Errors: `{ "error": { "code": string, "message": string } }` with 400/401/404/409/413/500.
+security:
+  - bearer: []
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    Category:
+      type: string
+      enum: [housing, food, transport, utilities, entertainment, health, shopping, savings, other]
+    TransactionInput:
+      type: object
+      required: [date, amountMinor, type, category, description]
+      properties:
+        date: { type: string, format: date }
+        amountMinor: { type: integer, not: { const: 0 } }
+        type: { type: string, enum: [expense, savings] }
+        category: { $ref: '#/components/schemas/Category' }
+        description: { type: string, minLength: 1, maxLength: 200 }
+        accountId: { type: [string, 'null'] }
+    Transaction:
+      allOf:
+        - $ref: '#/components/schemas/TransactionInput'
+        - type: object
+          properties:
+            txnId: { type: string }
+            origin: { type: string, enum: [manual, sync, csv] }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    Account:
+      type: object
+      properties:
+        accountId: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [checking, credit_card, savings] }
+        source: { type: string, enum: [simulated, csv] }
+        status: { type: string, enum: [linked, syncing, synced, failed] }
+        lastSyncedAt: { type: [string, 'null'], format: date-time }
+        failureReason: { type: [string, 'null'] }
+    Job:
+      type: object
+      properties:
+        jobId: { type: string }
+        accountId: { type: string }
+        kind: { type: string, enum: [sync, csv] }
+        status: { type: string, enum: [awaiting_upload, queued, running, succeeded, failed] }
+        imported: { type: integer }
+        skipped: { type: integer }
+        rejected: { type: integer }
+        rejections: { type: array, items: { type: object, properties: { row: { type: integer }, reason: { type: string } } } }
+    Insights:
+      type: object
+      properties:
+        months:
+          type: array
+          items:
+            type: object
+            properties:
+              month: { type: string, example: '2026-09' }
+              expenseMinor: { type: integer }
+              savingsMinor: { type: integer }
+              totals: { type: object, additionalProperties: { type: object } }
+        forecast:
+          type: object
+          properties:
+            status: { type: string, enum: [ok, insufficient_history, pending] }
+            historyMonths: { type: integer }
+            overall: { type: object, properties: { nextMonthMinor: { type: integer }, next3MonthsMinor: { type: integer } } }
+            byCategory: { type: object, additionalProperties: { type: object } }
+            computedAt: { type: [string, 'null'], format: date-time }
+        processing: { type: boolean, description: true when changes are newer than computedAt }
+paths:
+  /api/me:
+    get:
+      summary: Get (and lazily create) profile
+      responses: { '200': { description: Profile } }
+    patch:
+      summary: Update displayName / currency
+      responses: { '200': { description: Profile }, '409': { description: currency locked } }
+    delete:
+      summary: Delete account and all data (FR-007)
+      responses: { '202': { description: Deletion queued; login removed immediately } }
+  /api/transactions:
+    get:
+      summary: List own transactions
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: category, in: query, schema: { $ref: '#/components/schemas/Category' } }
+        - { name: type, in: query, schema: { type: string, enum: [expense, savings] } }
+        - { name: accountId, in: query, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Page (max 100), newest first
+          content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Transaction' } }, cursor: { type: [string, 'null'] } } } } }
+    post:
+      summary: Create manual transaction
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionInput' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Transaction' } } } }, '400': { description: Validation error } }
+  /api/transactions/{txnId}:
+    parameters:
+      - { name: txnId, in: path, required: true, schema: { type: string } }
+      - { name: date, in: query, required: true, description: current date of the transaction (part of key), schema: { type: string, format: date } }
+    put:
+      summary: Edit transaction (any field incl. category)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TransactionInput' } } } }
+      responses: { '200': { description: Updated }, '404': { description: Not found or not owned } }
+    delete:
+      summary: Delete transaction
+      responses: { '204': { description: Deleted }, '404': { description: Not found or not owned } }
+  /api/accounts:
+    get:
+      summary: List linked accounts with status
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Account' } } } } } }
+    post:
+      summary: Link a simulated account (or create a CSV source account); simulated triggers first sync
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [name, type, source], properties: { name: { type: string }, type: { type: string, enum: [checking, credit_card, savings] }, source: { type: string, enum: [simulated, csv] } } } } }
+      responses: { '202': { description: Linked; sync queued, content: { application/json: { schema: { type: object, properties: { account: { $ref: '#/components/schemas/Account' }, job: { $ref: '#/components/schemas/Job' } } } } } } }
+  /api/accounts/{accountId}:
+    parameters: [{ name: accountId, in: path, required: true, schema: { type: string } }]
+    delete:
+      summary: Unlink account
+      parameters: [{ name: deleteTransactions, in: query, required: true, schema: { type: boolean } }]
+      responses: { '204': { description: Unlinked } }
+  /api/accounts/{accountId}/sync:
+    parameters: [{ name: accountId, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Trigger (re)sync of a simulated account; inserts a queued sync job (routed to ingest-queue via the stream)
+      responses: { '202': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/Job' } } } }, '409': { description: Already syncing } }
+  /api/imports:
+    post:
+      summary: Start CSV import; returns presigned upload (max 5 MB)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [accountId], properties: { accountId: { type: string } } } } } }
+      responses: { '201': { description: Upload target, content: { application/json: { schema: { type: object, properties: { job: { $ref: '#/components/schemas/Job' }, upload: { type: object, properties: { url: { type: string }, fields: { type: object } } } } } } } } }
+  /api/imports/{jobId}/start:
+    parameters: [{ name: jobId, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Confirm upload finished; marks the import job queued (routed to ingest-queue via the stream)
+      responses: { '202': { description: Queued }, '409': { description: Already started } }
+  /api/jobs/{jobId}:
+    parameters: [{ name: jobId, in: path, required: true, schema: { type: string } }]
+    get:
+      summary: Poll job status / import summary
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Job' } } } } }
+  /api/insights:
+    get:
+      summary: Monthly aggregates (last 12 months) + forecast
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Insights' } } } } }

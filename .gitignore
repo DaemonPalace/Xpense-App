@@ -1,0 +1,15 @@
+node_modules/
+cdk.out/
+dist/
+build/
+*.log
+.env*
+.DS_Store
+*.tmp
+*.swp
+.vscode/
+.idea/
+.origin-secret
+.expo/
+ios/
+android/
