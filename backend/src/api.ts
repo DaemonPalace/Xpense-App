@@ -97,7 +97,10 @@ function incomeInput(b: any) {
   if (!isPositiveAmount(b.amountMinor)) throw badRequest("amountMinor must be a positive integer");
   const dayOfMonth = b.dayOfMonth ?? 1;
   if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) throw badRequest("dayOfMonth must be 1–31");
-  return { name: b.name.trim(), kind: b.kind, amountMinor: b.amountMinor, dayOfMonth };
+  // month (YYYY-MM) marks a one-off income that counts only in that month; null = every month.
+  const month = b.month ?? null;
+  if (month !== null && (typeof month !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month))) throw badRequest("month must be YYYY-MM");
+  return { name: b.name.trim(), kind: b.kind, amountMinor: b.amountMinor, dayOfMonth, month };
 }
 
 function goalInput(b: any) {
@@ -509,6 +512,19 @@ const routes: [string, string, Handler][] = [
   ["DELETE", "/api/devices/:token", async (ctx) => {
     await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: pk(ctx), SK: `DEVICE#${ctx.params.token}` } }));
     return { status: 204 };
+  }],
+
+  // ---- bug reports (F16) ----
+  // Operator reads them with a table scan on begins_with(SK, "FEEDBACK#") (HANDOFF.md).
+  // ponytail: no rate limit and no screenshot; add both if reports get abused or need images.
+  ["POST", "/api/feedback", async (ctx) => {
+    const { message, appVersion } = ctx.body ?? {};
+    if (typeof message !== "string" || !message.trim() || message.length > 2000) throw badRequest("message must be 1–2000 chars");
+    if (appVersion != null && (typeof appVersion !== "string" || appVersion.length > 40)) throw badRequest("appVersion must be a string of at most 40 chars");
+    const createdAt = now();
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: { PK: pk(ctx), SK: `FEEDBACK#${createdAt}`, message: message.trim(), appVersion: appVersion ?? null, createdAt } }));
+    log("info", "feedback received", { correlationId: ctx.correlationId, userId: ctx.user.sub, appVersion, length: message.length });
+    return { status: 201, body: { createdAt } };
   }],
 
   // ---- insights ----

@@ -19,9 +19,18 @@ describe("forecast", () => {
 
   it("flat history predicts the same amount; 3 months = 3x", () => {
     const months = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"].map((m) => agg(m, 1000));
-    const f = forecast([...months, agg("2026-10", 99999)], today); // current month excluded
+    const f = forecast([...months, agg("2026-10", 99999)], new Date("2026-10-03T00:00:00Z")); // first week: current month excluded
     expect(f).toMatchObject({ status: "ok", historyMonths: 6, overall: { nextMonthMinor: 1000, next3MonthsMinor: 3000 } });
     expect(f.byCategory.food).toEqual({ nextMonthMinor: 1000, next3MonthsMinor: 3000 });
+  });
+
+  it("after the first week, this month's pace moves the projection", () => {
+    const months = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"].map((m) => agg(m, 3100));
+    const at = (current: MonthlyAggregate[]) => forecast([...months, ...current], today).overall.nextMonthMinor; // day 24 of 31
+    expect(at([agg("2026-10", 2400)])).toBe(3100); // on pace: 2400 × 31/24 = 3100
+    expect(at([agg("2026-10", 1200)])).toBe(Math.round((3100 * 21 + 1550 * 7) / 28)); // deleted half: lower
+    expect(at([])).toBe(Math.round((3100 * 21) / 28)); // nothing spent this month
+    expect(at([agg("2026-10", 99999)])).toBe(Math.round((3100 * 21 + 6200 * 7) / 28)); // spike clamped to median × 2
   });
 
   it("uses at most 6 months and counts empty months as zero", () => {

@@ -9,6 +9,9 @@ export function parsePesos(text: string): number | null {
   return digits && Number(digits) > 0 ? Number(digits) * 100 : null;
 }
 
+/** "1500000" → "1.500.000" (display only; parsePesos reads either form). */
+export const groupPesos = (text: string) => text.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
 /** Device-local date as YYYY-MM-DD (transactions are dated in the user's day, not UTC). */
 export function localDate(d = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');

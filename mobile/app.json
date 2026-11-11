@@ -6,14 +6,14 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "xpense",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "ios": {
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "co.edu.unisabana.xpense"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#F5F5F5",
+        "backgroundColor": "#F3F8F7",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -30,7 +30,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#F5F5F5",
+          "backgroundColor": "#F3F8F7",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
@@ -39,7 +39,7 @@
       [
         "expo-notifications",
         {
-          "color": "#2E6B1F"
+          "color": "#0F766E"
         }
       ]
     ],

@@ -17,6 +17,7 @@ import * as sources from "aws-cdk-lib/aws-lambda-event-sources";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
@@ -51,6 +52,8 @@ export class FinanceStack extends Stack {
       writeCapacity: 25,
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
       timeToLiveAttribute: "expiresAt",
+      // Backup & recovery (I7): restore to any second of the last 35 days. Restore test: HANDOFF.md.
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
@@ -69,6 +72,9 @@ export class FinanceStack extends Stack {
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
       passwordPolicy: { minLength: 8, requireLowercase: true, requireUppercase: true, requireDigits: true, requireSymbols: true },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      // given_name/family_name are standard attributes (no schema entry needed). Custom attributes can be
+      // added to a live pool but never changed or removed, so keep this one generic.
+      customAttributes: { institution: new cognito.StringAttribute({ minLen: 1, maxLen: 100, mutable: true }) },
       removalPolicy: RemovalPolicy.DESTROY,
     });
     const userPoolClient = userPool.addClient("WebClient", {
@@ -196,15 +202,15 @@ export class FinanceStack extends Stack {
     });
 
     // ---------- CDN ----------
-    // SPA routing via a CloudFront Function (free tier) — distribution-wide error responses would also rewrite API 404s.
+    // The site is one static page (privacy policy and terms, I6): every path without a file extension serves it.
     const spaRewrite = new cloudfront.Function(this, "SpaRewrite", {
       runtime: cloudfront.FunctionRuntime.JS_2_0,
       code: cloudfront.FunctionCode.fromInline(
-        "function handler(event){var r=event.request;if(r.uri.indexOf('.')===-1){r.uri='/index.html';}return r;}",
+        "function handler(event){var r=event.request;if(r.uri.indexOf('.')===-1){r.uri='/privacy.html';}return r;}",
       ),
     });
     const distribution = new cloudfront.Distribution(this, "Site", {
-      defaultRootObject: "index.html",
+      defaultRootObject: "privacy.html",
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
@@ -222,6 +228,13 @@ export class FinanceStack extends Stack {
       },
     });
 
+
+    new s3deploy.BucketDeployment(this, "SiteFiles", {
+      sources: [s3deploy.Source.asset(join(ROOT, "site"))],
+      destinationBucket: siteBucket,
+      distribution,
+      distributionPaths: ["/*"],
+    });
 
     // ---------- alarms (9 alarm metrics of the 10 free, research R13) ----------
     const action = new cwActions.SnsAction(alerts);

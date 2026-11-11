@@ -39,3 +39,19 @@ npm run typecheck && npx expo lint
 ```
 
 Sign-in uses Cognito SRP (`amazon-cognito-identity-js`), so it runs in Expo Go without a dev build.
+
+UI: design system from the team's Xpense_AI prototype (NativeWind + Plus Jakarta Sans), wired to the API.
+
+| Route | What |
+|---|---|
+| `sign-in`, `sign-up`, `reset-password` | Cognito auth |
+| `consent`, `onboarding` | Habeas Data consent, monthly income + savings goal (gated in `(tabs)/_layout.tsx`) |
+| `(tabs)/hoy` | Safe-to-spend today, goal progress, alerts, 7-day chart, ant expenses, recent movements |
+| `(tabs)/gemelo` | Digital twin: month plan, 1/3-month forecast (`/api/insights`), habit simulator |
+| `(tabs)/comida` | Meal ideas within the per-meal budget |
+| `(tabs)/movimientos` | Month list (long-press delete, ant filter) and month summary by category |
+| `perfil` | Vault deposit/withdraw, plan, ant threshold, sign out, delete account |
+| `cuentas` | Test bank accounts and CSV import |
+
+Global sheets (new expense, plan, savings deposit) and the toast live in `src/components/overlays.tsx`;
+server state lives in `src/data-context.tsx`.

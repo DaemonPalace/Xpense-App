@@ -1,6 +1,7 @@
 /** Safe-to-spend math (requirements.md F4). Pure: amounts in minor units, dates as YYYY-MM-DD in the user's zone. */
 
-export interface Income { amountMinor: number }
+/** `month` (YYYY-MM) = one-off income for that month only; absent = received every month. */
+export interface Income { amountMinor: number; month?: string | null }
 export interface Goal { targetMinor: number; monthly: boolean; targetDate?: string | null }
 export interface Txn { date: string; amountMinor: number; type: string; category?: string }
 
@@ -8,6 +9,8 @@ export interface Summary {
   month: string;
   daysLeft: number;
   inflowsMinor: number;
+  /** Inflows that repeat every month (excludes this month's one-off incomes); used for projections. */
+  recurringInflowsMinor: number;
   savingsGoalMinor: number;
   savedMinor: number;
   allowedMinor: number;
@@ -47,7 +50,8 @@ export function summarize(today: string, incomes: Income[], goals: Goal[], txns:
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
   const inMonth = txns.filter((t) => t.date.startsWith(month));
   const expenses = inMonth.filter((t) => t.type === "expense");
-  const inflowsMinor = sum(incomes.map((i) => i.amountMinor));
+  const recurringInflowsMinor = sum(incomes.filter((i) => !i.month).map((i) => i.amountMinor));
+  const inflowsMinor = recurringInflowsMinor + sum(incomes.filter((i) => i.month === month).map((i) => i.amountMinor));
   const savingsGoalMinor = sum(goals.map((g) => monthlyContribution(g, today)));
   const savedMinor = sum(inMonth.filter((t) => t.type === "savings").map((t) => t.amountMinor));
   const spentMinor = sum(expenses.map((t) => t.amountMinor));
@@ -71,5 +75,5 @@ export function summarize(today: string, incomes: Income[], goals: Goal[], txns:
     dailyMinor[Number(t.date.slice(8, 10)) - 1] += t.amountMinor;
   }
 
-  return { month, daysLeft, inflowsMinor, savingsGoalMinor, savedMinor, allowedMinor, spentMinor, spentTodayMinor, remainingMinor, dailyLimitMinor, safeToSpendTodayMinor, pctUsed, status, byCategoryMinor, dailyMinor };
+  return { month, daysLeft, inflowsMinor, recurringInflowsMinor, savingsGoalMinor, savedMinor, allowedMinor, spentMinor, spentTodayMinor, remainingMinor, dailyLimitMinor, safeToSpendTodayMinor, pctUsed, status, byCategoryMinor, dailyMinor };
 }

@@ -39,6 +39,8 @@ export interface Summary {
   month: string;
   daysLeft: number;
   inflowsMinor: number;
+  /** Without this month's one-off incomes. */
+  recurringInflowsMinor: number;
   savingsGoalMinor: number;
   savedMinor: number;
   allowedMinor: number;
