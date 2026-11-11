@@ -43,7 +43,7 @@ or removed**, so don't add more casually.
 ## Run it
 
 ```bash
-cd xpense-app && npm ci && npm test            # backend: 79 tests
+cd xpense-app && npm ci && npm test            # backend: 82 tests
 cd mobile && npm install && npx expo start     # scan the QR with Expo Go
 npx tsc --noEmit && npx expo lint              # must stay clean
 ```
@@ -53,6 +53,26 @@ Deploy (use the operator email, otherwise the alarms and budget emails move to a
 ```bash
 cd xpense-app && npm run deploy -- -c alertEmail=<operator email>
 ```
+
+## Operator tasks (added 2026-11-11, need a deploy first)
+
+Read bug reports (F16, `POST /api/feedback`, sent from Mi perfil):
+```bash
+aws dynamodb scan --table-name <FinanceTable name> --filter-expression "begins_with(SK, :f)" \
+  --expression-attribute-values '{":f":{"S":"FEEDBACK#"}}' --query 'Items[].[createdAt.S,appVersion.S,message.S]' --output text
+```
+
+Backup restore test (point-in-time recovery is on; a restore always creates a new table):
+```bash
+aws dynamodb restore-table-to-point-in-time --source-table-name <FinanceTable name> \
+  --target-table-name xpense-restore-test --use-latest-restorable-time
+aws dynamodb wait table-exists --table-name xpense-restore-test
+aws dynamodb scan --table-name xpense-restore-test --select COUNT   # compare with the live table
+aws dynamodb delete-table --table-name xpense-restore-test          # a second table is outside the free tier: delete it right away
+```
+
+Privacy policy and terms: `site/privacy.html`, served at `<SiteUrl>/privacy.html` and linked from the consent screen and Mi perfil.
+Bump `CONSENT_VERSION` in `mobile/src/strings.ts` when it changes.
 
 ## Verified vs not verified
 
@@ -66,7 +86,7 @@ cd xpense-app && npm run deploy -- -c alertEmail=<operator email>
 2. **Institution isn't validated server-side.** Any string can be sent to Cognito. Add a pre-sign-up Lambda when more institutions exist (list in `mobile/src/strings.ts` `INSTITUTIONS`).
 3. **Name only shows after a fresh sign-in.** `given_name` is read from the ID token at sign-in; sessions saved before this change show the email.
 4. **Manual vs synced de-dup (FR-6.x) is not implemented.** Sync de-dup uses fingerprints within one account only, so a manual lunch and a synced lunch both count.
-5. **Not built yet:** mascot (F13), streaks/challenges (F15), in-app bug report (F16). The prototype's "Día" (hourly) view was dropped because transactions have no time of day.
+5. **Not built yet:** mascot (F13), streaks/challenges (F15). Bug reports (F16) have no screenshot. The prototype's "Día" (hourly) view was dropped because transactions have no time of day.
 6. **Plan sheet edits only the first income and the first monthly goal** (`ponytail:` comment in `overlays.tsx`).
 7. **Password rules exist twice**: `mobile/src/lib/password.ts` and `infra/stack.ts` `passwordPolicy`. Change both.
 8. **Unused deps** left in `mobile/package.json` from the old app: `@expo/ui`, `expo-symbols`, `expo-glass-effect`, `expo-image`. Remove them once confirmed unused.

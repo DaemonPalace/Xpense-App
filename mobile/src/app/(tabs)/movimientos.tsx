@@ -1,8 +1,8 @@
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, View } from 'react-native';
+import { ActivityIndicator, Alert, View } from 'react-native';
 
-import { BarChart, Button, Callout, Card, CardHeading, Choice, FormError, Progress, Screen, Segmented, styleFor, Text, TransactionList } from '@/components/ui';
+import { BarChart, Button, Callout, Card, CardHeading, Choice, colors, FormError, Progress, Screen, Segmented, styleFor, Text, TransactionList } from '@/components/ui';
 import { useAppData } from '@/data-context';
 import { api, type Transaction } from '@/lib/api';
 import { formatCOP } from '@/lib/money';
@@ -20,7 +20,7 @@ function Lista() {
   const { summary, refresh } = useAppData();
   const params = useLocalSearchParams<{ ant?: string }>();
   const [antOnly, setAntOnly] = useState(params.ant === '1');
-  const [items, setItems] = useState<Transaction[]>([]);
+  const [items, setItems] = useState<Transaction[] | null>(null); // null = first load in flight
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState('');
   const ant = new Set(summary?.ant.txnIds);
@@ -31,23 +31,24 @@ function Lista() {
       const q = new URLSearchParams({ from: `${summary.month}-01`, to: summary.today });
       if (after) q.set('cursor', after);
       const page = await api<{ items: Transaction[]; cursor: string | null }>('GET', `/api/transactions?${q}`);
-      setItems(prev => (after ? [...prev, ...page.items] : page.items));
+      setItems(prev => (after && prev ? [...prev, ...page.items] : page.items));
       setCursor(page.cursor);
       setError('');
     } catch {
+      setItems(prev => prev ?? []);
       setError(t.common.genericError);
     }
   }, [summary]);
   useFocusEffect(useCallback(() => void load(), [load]));
 
   function confirmDelete(tx: Transaction) {
-    if (tx.origin === 'vault') return; // reversed with a vault withdrawal
+    if (tx.origin === 'vault') return Alert.alert('Este aporte no se elimina aquí', 'Para revertirlo, retira de la caja fuerte desde tu perfil.');
     Alert.alert(t.movements.deleteTitle, `${tx.description} · ${formatCOP(tx.amountMinor)}`, [
       { text: t.common.cancel, style: 'cancel' },
       { text: t.movements.delete, style: 'destructive', onPress: async () => {
         try {
           await api('DELETE', `/api/transactions/${tx.txnId}?date=${tx.date}`);
-          setItems(xs => xs.filter(x => x.txnId !== tx.txnId));
+          setItems(xs => (xs ?? []).filter(x => x.txnId !== tx.txnId));
           refresh();
         } catch {
           setError(t.common.genericError);
@@ -56,7 +57,7 @@ function Lista() {
     ]);
   }
 
-  const shown = antOnly ? items.filter(x => ant.has(x.txnId)) : items;
+  const shown = (items ?? []).filter(x => !antOnly || ant.has(x.txnId));
   return <>
     <View className="mb-4 flex-row gap-2">
       <Choice label={t.movements.all} selected={!antOnly} onPress={() => setAntOnly(false)} />
@@ -64,10 +65,10 @@ function Lista() {
     </View>
     <FormError message={error} />
     <Card>
-      <TransactionList items={shown} ant={ant} onLongPress={confirmDelete} />
-      {cursor && !antOnly ? <Button variant="ghost" label={t.movements.more} onPress={() => load(cursor)} /> : null}
+      {items ? <TransactionList items={shown} ant={ant} onDelete={confirmDelete} /> : <ActivityIndicator accessibilityLabel="Cargando movimientos" color={colors.brand} className="py-6" />}
+      {/* Also with the ant filter on: it only filters the pages loaded so far. */}
+      {cursor ? <Button variant="ghost" label={t.movements.more} onPress={() => load(cursor)} /> : null}
     </Card>
-    <Text className="mt-3 text-xs text-muted">Mantén presionado un movimiento para eliminarlo.</Text>
   </>;
 }
 

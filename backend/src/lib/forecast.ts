@@ -13,6 +13,8 @@ export interface ForecastResult {
 
 export const MAX_HISTORY = 6;
 export const MIN_HISTORY = 2;
+/** From this day of the month on, the current month's pace joins the series as its newest point. */
+export const PACE_MIN_DAYS = 7;
 
 const monthKey = (d: Date) => d.toISOString().slice(0, 7);
 function prevMonth(month: string, n = 1): string {
@@ -49,16 +51,26 @@ export function forecast(aggregates: Iterable<MonthlyAggregate>, today = new Dat
   for (let m = prevMonth(current); m >= complete[0] && window.length < MAX_HISTORY; m = prevMonth(m)) window.unshift(m);
   if (window.length < MIN_HISTORY) return { ...empty, historyMonths: window.length };
 
-  const categories = new Set(window.flatMap((m) => Object.keys(byMonth.get(m)?.totals ?? {})));
+  // "Si sigues así": the month in progress counts too, extrapolated to a full month, so adding or deleting
+  // this month's expenses moves the projection. predict() still clamps it to median × 2.
+  // ponytail: linear pace over-weights early fixed costs (rent on day 1); skip the first week, and switch to
+  // per-category seasonality if that still misleads.
+  const day = today.getUTCDate();
+  const daysInMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)).getUTCDate();
+  const months = day >= PACE_MIN_DAYS ? [...window, current] : window;
+  const series = (pick: (a?: MonthlyAggregate) => number) =>
+    months.map((m) => (m === current ? Math.round((pick(byMonth.get(m)) * daysInMonth) / day) : pick(byMonth.get(m))));
+
+  const categories = new Set(months.flatMap((m) => Object.keys(byMonth.get(m)?.totals ?? {})));
   const byCategory: Record<string, ForecastValue> = {};
   for (const c of categories) {
-    const series = window.map((m) => byMonth.get(m)?.totals[c]?.expenseMinor ?? 0);
-    if (series.some((v) => v !== 0)) byCategory[c] = predict(series);
+    const s = series((a) => a?.totals[c]?.expenseMinor ?? 0);
+    if (s.some((v) => v !== 0)) byCategory[c] = predict(s);
   }
   return {
     status: "ok",
     historyMonths: window.length,
-    overall: predict(window.map((m) => byMonth.get(m)?.expenseMinor ?? 0)),
+    overall: predict(series((a) => a?.expenseMinor ?? 0)),
     byCategory,
   };
 }

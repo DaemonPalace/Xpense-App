@@ -113,6 +113,21 @@ describe("vault and devices", () => {
     expect(del.ExpressionAttributeValues[":vault"]).toBe("vault");
   });
 
+  it("stores a bug report (F16)", async () => {
+    expect((await call("POST", "/api/feedback", { message: "  " })).status).toBe(400);
+    expect((await call("POST", "/api/feedback", { message: " No carga el resumen ", appVersion: "1.0.0" })).status).toBe(201);
+    const item = writes.at(-1).input.Item;
+    expect(item).toMatchObject({ PK: "USER#U", message: "No carga el resumen", appVersion: "1.0.0" });
+    expect(item.SK).toMatch(/^FEEDBACK#\d{4}-/);
+  });
+
+  it("one-off incomes count only in their month", async () => {
+    expect((await call("POST", "/api/incomes", { name: "Regalo", kind: "other", amountMinor: 100, month: "2026-13" })).status).toBe(400);
+    const month = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bogota" }).format(new Date()).slice(0, 7);
+    items["INCOME#"] = [{ amountMinor: 1000 }, { amountMinor: 200, month }, { amountMinor: 50, month: "2020-01" }];
+    expect((await call("GET", "/api/summary")).body).toMatchObject({ inflowsMinor: 1200, recurringInflowsMinor: 1000 });
+  });
+
   it("devices accept only Expo push tokens", async () => {
     expect((await call("POST", "/api/devices", { token: "abc", platform: "ios" })).status).toBe(400);
     expect((await call("POST", "/api/devices", { token: "ExponentPushToken[xYz-123]", platform: "android" })).status).toBe(201);

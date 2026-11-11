@@ -34,7 +34,7 @@ export default function Cuentas() {
       await load();
       if (jobId) {
         const job: Job = await waitForJob(jobId);
-        setMessage(job.status === 'succeeded' ? t.accounts.jobDone(job.imported, job.skipped, job.rejected) : t.accounts.jobFailed(job.failureReason ?? ''));
+        setMessage(job.status === 'succeeded' ? t.accounts.jobDone(job.imported, job.skipped, job.rejected) : t.accounts.jobFailed());
       } else setMessage('');
     } catch {
       setMessage('');
@@ -85,13 +85,13 @@ export default function Cuentas() {
         <View className="flex-1">
           <Text className="font-strong text-[15px] text-ink">{a.name}</Text>
           {a.lastSyncedAt ? <Text className="text-xs text-muted">{t.accounts.lastSync(new Date(a.lastSyncedAt).toLocaleString('es-CO'))}</Text> : null}
-          {a.failureReason ? <Text className="text-xs text-danger">{a.failureReason}</Text> : null}
+          {a.failureReason ? <Text className="text-xs text-danger">{t.accounts.jobFailed()}</Text> : null}
         </View>
         <Chip label={t.accounts.status[a.status] ?? a.status} tone={a.status === 'failed' ? 'amber' : a.status === 'synced' ? 'green' : 'brand'} />
       </View>
-      <View className="mt-2 flex-row gap-4">
-        {a.source === 'simulated' && !busy && a.status !== 'syncing' ? <SmallLink label={t.accounts.sync} onPress={() => sync(a)} /> : null}
-        {!busy ? <SmallLink label={t.accounts.unlink} onPress={() => unlink(a)} /> : null}
+      <View className="mt-2 flex-row justify-between gap-4">
+        {a.source === 'simulated' && !busy && a.status !== 'syncing' ? <SmallLink button label={t.accounts.sync} onPress={() => sync(a)} /> : <View />}
+        {!busy ? <SmallLink button danger label={t.accounts.unlink} onPress={() => unlink(a)} /> : null}
       </View>
     </Card>)}
     {!accounts.length ? <Text className="mb-4 text-sm text-muted">{t.accounts.empty}</Text> : null}

@@ -58,6 +58,7 @@ export const t = {
       'Puedes consultar, corregir o eliminar tus datos cuando quieras desde Ajustes → Eliminar cuenta.',
     ],
     accept: 'Acepto el tratamiento de mis datos',
+    policy: 'Leer la política de privacidad y los términos',
   },
   onboarding: {
     title: 'Configura tu mes',
@@ -79,6 +80,7 @@ export const t = {
     overToday: 'Hoy ya pasaste tu límite diario.',
     over: (v: string) => `Tu meta de ahorro está en riesgo: te pasaste ${v}.`,
     add: 'Registrar gasto',
+    addIncome: 'Registrar ingreso',
     settings: 'Ajustes',
     links: { dashboard: 'Resumen', movements: 'Movimientos', accounts: 'Cuentas', vault: 'Caja fuerte' },
   },
@@ -125,7 +127,7 @@ export const t = {
     lastSync: (d: string) => `Última sincronización: ${d}`,
     working: 'Procesando…',
     jobDone: (i: number, s: number, r: number) => `Listo: ${i} importados, ${s} duplicados omitidos, ${r} rechazados.`,
-    jobFailed: (reason: string) => `No se pudo procesar: ${reason}`,
+    jobFailed: () => 'No se pudo procesar. Inténtalo de nuevo.', // backend reasons are internal English text
     empty: 'Aún no tienes cuentas conectadas.',
   },
   vault: {
@@ -166,6 +168,14 @@ export const t = {
     deleteConfirmTitle: '¿Eliminar tu cuenta?',
     deleteConfirmBody: 'Se borrarán tu cuenta y todos tus datos. Esta acción no se puede deshacer.',
     deleteConfirm: 'Eliminar',
+  },
+  feedback: {
+    title: 'Reportar un problema',
+    intro: 'Cuéntanos qué falló o qué mejorarías. El equipo lo revisa.',
+    label: '¿Qué pasó?',
+    placeholder: 'Ej. Registré un gasto y no apareció en Hoy.',
+    send: 'Enviar reporte',
+    sent: 'Reporte enviado. ¡Gracias!',
   },
 } as const;
 

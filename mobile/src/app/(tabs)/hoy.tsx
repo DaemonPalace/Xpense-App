@@ -27,27 +27,30 @@ export default function Hoy() {
   const banner = s.status === 'over' ? t.home.over(formatCOP(-s.remainingMinor)) : overToday ? t.home.overToday : s.status === 'warning' ? t.home.warning : null;
 
   return <Screen title="Hoy" subtitle={`Hola${name ? `, ${name}` : ''}. Así va tu mes.`} fab>
-    {!hasAccounts && !bankPromptHidden ? <Pressable accessibilityRole="link" accessibilityHint="Abre la pantalla para conectar tu banco" onPress={() => router.push('/cuentas')} className="mb-5 active:opacity-80">
-      <Card className="flex-row items-center gap-3 pr-12">
-        <Ionicons name="card-outline" size={28} color={colors.brand} />
-        <View className="flex-1"><Text className="font-strong text-[15px] text-ink">Registra gastos solo</Text><Text className="text-sm leading-5 text-muted">Conecta tu banco o importa un extracto y se anotan automáticamente.</Text></View>
-      </Card>
-      <Pressable accessibilityRole="button" accessibilityLabel="Cerrar aviso" hitSlop={4} onPress={() => hideBankPrompt(true)} className="absolute right-1 top-1 h-11 w-11 items-center justify-center rounded-full active:opacity-60">
+    {/* Siblings, not nested: a Pressable inside the link would be hidden from screen readers. */}
+    {!hasAccounts && !bankPromptHidden ? <View className="mb-5">
+      <Pressable accessibilityRole="link" accessibilityHint="Abre la pantalla para conectar tu banco" onPress={() => router.push('/cuentas')} className="active:opacity-80">
+        <Card className="flex-row items-center gap-3 pr-12">
+          <Ionicons name="card-outline" size={28} color={colors.brand} />
+          <View className="flex-1"><Text className="font-strong text-[15px] text-ink">Registra gastos solo</Text><Text className="text-sm leading-5 text-muted">Conecta tu banco o importa un extracto y se anotan automáticamente.</Text></View>
+        </Card>
+      </Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Cerrar aviso" onPress={() => hideBankPrompt(true)} className="absolute right-0 top-0 h-12 w-12 items-center justify-center rounded-full active:opacity-60">
         <Ionicons name="close" size={20} color={colors.muted} />
       </Pressable>
-    </Pressable> : null}
+    </View> : null}
 
     {banner ? <View className="mb-5"><Callout tone={s.status === 'warning' && !overToday ? 'amber' : 'danger'} icon="warning-outline" title={banner} /></View> : null}
 
     <View className="mb-5 rounded-[28px] bg-brand p-6">
       <Text className="font-semi text-sm text-brand-soft">{t.home.safeToSpend}</Text>
-      <Text accessibilityRole="header" className={`mt-1 font-heavy text-[44px] leading-[52px] ${overToday ? 'text-[#FECACA]' : 'text-white'}`}>{formatCOP(s.safeToSpendTodayMinor)}</Text>
+      <Text accessibilityRole="header" numberOfLines={1} adjustsFontSizeToFit className={`mt-1 font-heavy text-[44px] leading-[52px] ${overToday ? 'text-[#FECACA]' : 'text-white'}`}>{formatCOP(s.safeToSpendTodayMinor)}</Text>
       <Text className="mt-1 text-sm leading-5 text-brand-soft">{t.home.dailyLimit(formatCOP(s.dailyLimitMinor))} · {t.home.remaining(formatCOP(Math.max(0, s.remainingMinor)), s.daysLeft)}</Text>
       {s.savingsGoalMinor > 0 ? <View className="mt-5">
-        <View className="mb-2 flex-row items-center justify-between"><Text className="font-semi text-sm text-white">Meta de ahorro · {pct}%</Text><Text className="font-semi text-sm text-white">{formatCOP(s.savedMinor)} / {formatCOP(s.savingsGoalMinor)}</Text></View>
+        <View className="mb-2 flex-row flex-wrap items-center justify-between gap-x-3"><Text className="font-semi text-sm text-white">Meta de ahorro · {pct}%</Text><Text className="font-semi text-sm text-white">{formatCOP(s.savedMinor)} / {formatCOP(s.savingsGoalMinor)}</Text></View>
         <Progress value={pct} color="#FFFFFF" track="#2F9188" label="Progreso de tu meta de ahorro" />
       </View> : null}
-      <Pressable accessibilityRole="button" onPress={() => openSheet('saving')} className="mt-4 min-h-11 flex-row items-center gap-1 self-start active:opacity-80"><Ionicons name="arrow-up-circle-outline" size={20} color="#fff" /><Text className="font-strong text-sm text-white">Aportar a mi meta</Text></Pressable>
+      <Pressable accessibilityRole="button" onPress={() => openSheet('saving')} className="mt-4 min-h-12 flex-row items-center gap-1 self-start active:opacity-80"><Ionicons name="arrow-up-circle-outline" size={20} color="#fff" /><Text className="font-strong text-sm text-white">Aportar a mi meta</Text></Pressable>
     </View>
 
     <Card className="mb-5">

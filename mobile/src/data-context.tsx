@@ -1,12 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
+import { announce } from '@/lib/announce';
 import { api, ApiError, type Summary, type Transaction } from '@/lib/api';
 import { localDate } from '@/lib/money';
 import { registerForPush } from '@/lib/push';
 import { useSession } from '@/session-context';
 import { t } from '@/strings';
 
-export type Sheet = 'expense' | 'plan' | 'saving' | null;
+export type Sheet = 'expense' | 'income' | 'plan' | 'saving' | null;
 
 interface AppData {
   summary: Summary | null;
@@ -60,6 +61,7 @@ function Provider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!toast) return;
+    announce(toast);
     const timer = setTimeout(() => setToast(''), 3500);
     return () => clearTimeout(timer);
   }, [toast]);

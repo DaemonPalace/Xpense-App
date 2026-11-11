@@ -2,25 +2,26 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text as RNText, TextInput, View,
+  ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text as RNText, TextInput, View,
   type TextInputProps, type TextProps,
 } from 'react-native';
 import Animated, { SlideInDown } from 'react-native-reanimated';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppData } from '@/data-context';
+import { announce } from '@/lib/announce';
 import { CognitoError } from '@/lib/cognito';
 import type { Transaction } from '@/lib/api';
-import { formatCOP } from '@/lib/money';
+import { formatCOP, groupPesos } from '@/lib/money';
 import { t } from '@/strings';
 
 export type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 export const colors = {
   brand: '#0F766E', brandSoft: '#DDF3EF', brandDark: '#0B4F4A', ink: '#0F2E2B', muted: '#4A6361',
-  line: '#D9E6E3', amber: '#B45309', amberSoft: '#FEF3C7', chart: '#5BB0A4', danger: '#B91C1C',
+  line: '#D9E6E3', amber: '#B45309', amberSoft: '#FEF3C7', chart: '#3E968A', danger: '#B91C1C', hint: '#5F7A77',
 };
 
 type CatStyle = { icon: IconName; background: string; color: string };
@@ -31,7 +32,7 @@ export const categoryStyle: Record<string, CatStyle> = {
   snacks: cat('cafe-outline', '#FFEDD5', '#C2410C'),
   transport: cat('bus-outline', '#E0F2FE', '#0369A1'),
   rideshare: cat('car-outline', '#E0E7FF', '#4338CA'),
-  parking: cat('bicycle-outline', '#D1FAE5', '#047857'),
+  parking: cat('car-sport-outline', '#D1FAE5', '#047857'),
   outings: cat('beer-outline', '#FCE7F3', '#BE185D'),
   academic: cat('book-outline', '#EDE9FE', '#6D28D9'),
   shopping: cat('bag-outline', '#FEE2E2', '#B91C1C'),
@@ -73,9 +74,14 @@ export function Screen({ title, subtitle, fab, children }: { title: string; subt
       {children}
     </ScrollView>
     </KeyboardAvoidingView>
-    {fab ?<Pressable accessibilityRole="button" accessibilityLabel={t.home.add} onPress={() => openSheet('expense')} className="absolute bottom-4 right-5 h-14 flex-row items-center gap-2 rounded-full bg-brand px-5 shadow-lg active:opacity-85">
-      <Ionicons name="add" size={24} color="#fff" /><Text className="font-strong text-base text-white">Gasto</Text>
-    </Pressable> : null}
+    {fab ? <View pointerEvents="box-none" className="absolute bottom-4 right-5 flex-row items-center gap-3">
+      <Pressable accessibilityRole="button" accessibilityLabel={t.home.addIncome} onPress={() => openSheet('income')} className="min-h-12 flex-row items-center gap-1.5 rounded-full border border-line bg-white px-4 shadow-sm active:opacity-85">
+        <Ionicons name="add" size={20} color={colors.brand} /><Text className="font-semi text-sm text-brand">Ingreso</Text>
+      </Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel={t.home.add} onPress={() => openSheet('expense')} className="min-h-14 flex-row items-center gap-2 rounded-full bg-brand px-5 shadow-lg active:opacity-85">
+        <Ionicons name="add" size={24} color="#fff" /><Text className="font-strong text-base text-white">Gasto</Text>
+      </Pressable>
+    </View> : null}
   </SafeAreaView>;
 }
 
@@ -105,8 +111,9 @@ export function CardHeading({ title, subtitle, action }: { title: string; subtit
   </View>;
 }
 
-export function SmallLink({ label, onPress }: { label: string; onPress: () => void }) {
-  return <Pressable accessibilityRole="link" onPress={onPress} hitSlop={8} className="min-h-11 justify-center active:opacity-70"><Text className="font-strong text-sm text-brand">{label}</Text></Pressable>;
+/** Text action. `button` for actions that do something here (default role is link: navigation); `danger` for destructive ones. */
+export function SmallLink({ label, onPress, button, danger }: { label: string; onPress: () => void; button?: boolean; danger?: boolean }) {
+  return <Pressable accessibilityRole={button ? 'button' : 'link'} onPress={onPress} hitSlop={8} className="min-h-11 justify-center active:opacity-70"><Text className={`font-strong text-sm ${danger ? 'text-danger' : 'text-brand'}`}>{label}</Text></Pressable>;
 }
 
 /* ---------- Controls ---------- */
@@ -130,7 +137,7 @@ export function Chip({ label, tone = 'brand' }: { label: string; tone?: 'brand' 
 
 /** Tappable choice pill (category, preset amounts). */
 export function Choice({ label, selected, onPress, icon }: { label: string; selected: boolean; onPress: () => void; icon?: IconName }) {
-  return <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} className={`min-h-11 flex-row items-center gap-2 rounded-full px-4 active:opacity-80 ${selected ? 'bg-brand' : 'bg-brand-soft'}`}>
+  return <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} className={`min-h-12 flex-row items-center gap-2 rounded-full px-4 active:opacity-80 ${selected ? 'bg-brand' : 'bg-brand-soft'}`}>
     {icon ? <Ionicons name={icon} size={18} color={selected ? '#fff' : colors.brand} /> : null}
     <Text className={`font-semi text-sm ${selected ? 'text-white' : 'text-brand'}`}>{label}</Text>
   </Pressable>;
@@ -138,13 +145,14 @@ export function Choice({ label, selected, onPress, icon }: { label: string; sele
 
 export function Segmented<T extends string>({ options, value, onChange }: { options: { value: T; label: string }[]; value: T; onChange: (value: T) => void }) {
   return <View accessibilityRole="tablist" className="flex-row rounded-2xl bg-[#E4EEEC] p-1">
-    {options.map(option => <Pressable key={option.value} accessibilityRole="tab" accessibilityState={{ selected: value === option.value }} onPress={() => onChange(option.value)} className={`min-h-11 flex-1 items-center justify-center rounded-xl ${value === option.value ? 'bg-white' : ''}`}>
-      <Text className={`text-sm ${value === option.value ? 'font-strong text-brand' : 'font-semi text-muted'}`}>{option.label}</Text>
+    {options.map(option => <Pressable key={option.value} accessibilityRole="tab" accessibilityState={{ selected: value === option.value }} onPress={() => onChange(option.value)} className={`min-h-12 flex-1 items-center justify-center rounded-xl px-2 py-1 ${value === option.value ? 'bg-white' : ''}`}>
+      <Text className={`text-center text-sm ${value === option.value ? 'font-strong text-brand' : 'font-semi text-muted'}`}>{option.label}</Text>
     </Pressable>)}
   </View>;
 }
 
-export function Stepper({ value, min = 1, max = 7, onChange, label }: { value: number; min?: number; max?: number; onChange: (value: number) => void; label: string }) {
+export function Stepper({ value, min = 1, max = 7, onChange: change, label }: { value: number; min?: number; max?: number; onChange: (value: number) => void; label: string }) {
+  const onChange = (v: number) => { change(v); announce(`${v} ${v === 1 ? 'vez' : 'veces'} por semana`); };
   return <View className="flex-row items-center justify-between rounded-2xl bg-canvas p-2">
     <Pressable accessibilityRole="button" accessibilityLabel={`Menos ${label}`} disabled={value <= min} onPress={() => onChange(value - 1)} className={`h-12 w-12 items-center justify-center rounded-xl bg-white active:opacity-70 ${value <= min ? 'opacity-40' : ''}`}><Ionicons name="remove" size={24} color={colors.brand} /></Pressable>
     <Text accessibilityLiveRegion="polite" className="font-strong text-base text-ink">{value} {value === 1 ? 'vez' : 'veces'} por semana</Text>
@@ -152,14 +160,18 @@ export function Stepper({ value, min = 1, max = 7, onChange, label }: { value: n
   </View>;
 }
 
-/** Text input. With `secureTextEntry` it gets a show/hide toggle; `children` render under the input. */
-export function Field({ label, prefix, helper, right, secureTextEntry, children, ...input }: TextInputProps & { label: string; value: string; onChangeText: (value: string) => void; prefix?: string; helper?: string; right?: React.ReactNode; children?: React.ReactNode }) {
+/**
+ * Text input. With `secureTextEntry` it gets a show/hide toggle; `children` render under the input.
+ * `money`: peso amount. The value stays plain digits and is shown with thousands dots ("1.500.000").
+ */
+export function Field({ label, money, helper, right, secureTextEntry, children, value, onChangeText, ...input }: TextInputProps & { label: string; value: string; onChangeText: (value: string) => void; money?: boolean; helper?: string; right?: React.ReactNode; children?: React.ReactNode }) {
   const [shown, setShown] = useState(false);
   return <View className="mb-4">
     <Text className="mb-2 font-semi text-sm text-ink">{label}</Text>
-    <View className="min-h-12 flex-row items-center rounded-2xl border border-line bg-white pl-4">
-      {prefix ? <Text className="mr-1 font-semi text-base text-muted">{prefix}</Text> : null}
-      <TextInput accessibilityLabel={label} className="min-h-12 flex-1 pr-4 font-body text-base text-ink" placeholderTextColor="#7A908D" autoCapitalize="none" secureTextEntry={secureTextEntry && !shown} {...input} />
+    <View className="min-h-12 flex-row items-center rounded-2xl border border-field bg-white pl-4">
+      {money ? <Text className="mr-1 font-semi text-base text-muted">$</Text> : null}
+      <TextInput accessibilityLabel={label} className="min-h-12 flex-1 pr-4 font-body text-base text-ink" placeholderTextColor={colors.hint} autoCapitalize="none" secureTextEntry={secureTextEntry && !shown}
+        keyboardType={money ? 'number-pad' : undefined} value={money ? groupPesos(value) : value} onChangeText={money ? v => onChangeText(v.replace(/\D/g, '')) : onChangeText} {...input} />
       {secureTextEntry ? <Pressable accessibilityRole="button" accessibilityLabel={shown ? t.auth.hidePassword : t.auth.showPassword} onPress={() => setShown(!shown)} className="h-12 w-12 items-center justify-center active:opacity-70">
         <Ionicons name={shown ? 'eye-off-outline' : 'eye-outline'} size={22} color={colors.muted} />
       </Pressable> : right}
@@ -182,8 +194,8 @@ export function Select({ label, value, options, onChange, placeholder }: { label
   const [open, setOpen] = useState(false);
   return <View className="mb-4">
     <Text className="mb-2 font-semi text-sm text-ink">{label}</Text>
-    <Pressable accessibilityRole="button" accessibilityLabel={`${label}: ${value || placeholder}`} onPress={() => setOpen(true)} className="min-h-12 flex-row items-center rounded-2xl border border-line bg-white px-4 active:opacity-80">
-      <Text className={`flex-1 text-base ${value ? 'text-ink' : 'text-[#7A908D]'}`}>{value || placeholder}</Text>
+    <Pressable accessibilityRole="button" accessibilityLabel={`${label}: ${value || placeholder}`} onPress={() => setOpen(true)} className="min-h-12 flex-row items-center rounded-2xl border border-field bg-white px-4 active:opacity-80">
+      <Text className={`flex-1 text-base ${value ? 'text-ink' : 'text-hint'}`}>{value || placeholder}</Text>
       <Ionicons name="chevron-down" size={20} color={colors.muted} />
     </Pressable>
     <Sheet visible={open} close={() => setOpen(false)} title={label}>
@@ -196,6 +208,7 @@ export function Select({ label, value, options, onChange, placeholder }: { label
 }
 
 export function FormError({ message }: { message: string }) {
+  useEffect(() => announce(message), [message]);
   if (!message) return null;
   return <View accessibilityRole="alert" className="mb-4 flex-row items-start gap-2 rounded-2xl bg-amber-soft p-3"><Ionicons name="alert-circle" size={20} color={colors.amber} /><Text className="flex-1 text-sm leading-5 text-amber">{message}</Text></View>;
 }
@@ -222,7 +235,8 @@ export function IconTile({ icon, background, color, size = 44 }: { icon: IconNam
 
 const ORIGIN: Record<Transaction['origin'], string> = { manual: '', sync: ' · Banco', csv: ' · CSV', vault: ' · Caja fuerte' };
 
-export function TransactionList({ items, empty = t.movements.empty, ant, onLongPress }: { items: Transaction[]; empty?: string; ant?: Set<string>; onLongPress?: (item: Transaction) => void }) {
+/** With `onDelete` every row gets a trash button. */
+export function TransactionList({ items, empty = t.movements.empty, ant, onDelete }: { items: Transaction[]; empty?: string; ant?: Set<string>; onDelete?: (item: Transaction) => void }) {
   if (!items.length) return <Text className="py-4 text-sm text-muted">{empty}</Text>;
   return <View>{items.map((item, index) => {
     const style = styleFor(item.category);
@@ -230,11 +244,16 @@ export function TransactionList({ items, empty = t.movements.empty, ant, onLongP
     const [y, m, d] = item.date.split('-').map(Number);
     const date = new Date(y, m - 1, d).toLocaleDateString('es-CO', { day: 'numeric', month: 'short' });
     const saving = item.type === 'savings';
-    return <Pressable key={item.txnId} disabled={!onLongPress} onLongPress={() => onLongPress?.(item)} accessibilityHint={onLongPress ? t.movements.deleteTitle : undefined} accessibilityLabel={`${item.description}, ${label}, ${date}, ${formatCOP(item.amountMinor)}`} className={`flex-row items-center gap-3 py-3 ${index < items.length - 1 ? 'border-b border-line' : ''}`}>
-      <IconTile icon={style.icon} background={style.background} color={style.color} />
-      <View className="flex-1"><Text numberOfLines={1} className="font-semi text-[15px] text-ink">{item.description}</Text><Text className="mt-0.5 text-xs text-muted">{label} · {date}{ORIGIN[item.origin]}{ant?.has(item.txnId) ? ` · ${t.movements.ant}` : ''}</Text></View>
-      <Text className={`font-strong text-[15px] ${saving ? 'text-brand' : 'text-ink'}`}>{saving ? '' : '− '}{formatCOP(item.amountMinor)}</Text>
-    </Pressable>;
+    return <View key={item.txnId} className={`flex-row items-center py-3 ${index < items.length - 1 ? 'border-b border-line' : ''}`}>
+      <View accessible accessibilityLabel={`${item.description}, ${label}, ${date}, ${formatCOP(item.amountMinor)}`} className="flex-1 flex-row items-center gap-3">
+        <IconTile icon={style.icon} background={style.background} color={style.color} />
+        <View className="flex-1"><Text numberOfLines={1} className="font-semi text-[15px] text-ink">{item.description}</Text><Text className="mt-0.5 text-xs text-muted">{label} · {date}{ORIGIN[item.origin]}{ant?.has(item.txnId) ? ` · ${t.movements.ant}` : ''}</Text></View>
+        <Text className={`font-strong text-[15px] ${saving ? 'text-brand' : 'text-ink'}`}>{saving ? '' : '− '}{formatCOP(item.amountMinor)}</Text>
+      </View>
+      {onDelete ? <Pressable accessibilityRole="button" accessibilityLabel={`${t.movements.delete}: ${item.description}`} onPress={() => onDelete(item)} className="-mr-2 h-12 w-12 items-center justify-center active:opacity-60">
+        <Ionicons name="trash-outline" size={20} color={colors.muted} />
+      </Pressable> : null}
+    </View>;
   })}</View>;
 }
 
@@ -246,7 +265,7 @@ export function BarChart({ values, labels, highlight, onSelect, describe, height
   const max = Math.max(...values, floor);
   return <View style={{ height: height + 26 }}>
     <View className="flex-1 flex-row items-end justify-around gap-1.5 pb-6">
-      {values.map((value, index) => <Pressable key={index} accessibilityRole="button" accessibilityState={{ selected: index === highlight }} accessibilityLabel={`${describe(index)}: ${formatCOP(value)}`} onPress={() => onSelect(index)} className="h-full flex-1 items-center justify-end active:opacity-70">
+      {values.map((value, index) => <Pressable key={index} accessibilityRole="button" accessibilityState={{ selected: index === highlight }} accessibilityLabel={`${describe(index)}: ${formatCOP(value)}`} onPress={() => { onSelect(index); announce(`${describe(index)}: ${formatCOP(value)}`); }} className="h-full flex-1 items-center justify-end active:opacity-70">
         <View className="w-full max-w-[28px] rounded-t-lg" style={{ height: Math.max(4, Math.min(height, value / max * height)), backgroundColor: index === highlight ? colors.brand : colors.chart }} />
         <Text className={`absolute -bottom-[22px] text-xs ${index === highlight ? 'font-strong text-brand' : 'text-muted'}`}>{labels[index]}</Text>
       </Pressable>)}
@@ -261,18 +280,23 @@ export function GradientTile({ children, colors: stops, className = '' }: { chil
 
 /* ---------- Bottom sheet ---------- */
 
-export function Sheet({ visible = true, close, title, children }: { visible?: boolean; close: () => void; title: string; children: React.ReactNode }) {
+/**
+ * `footer` stays pinned under the scrolling content (the primary button).
+ * `dirty`: the form has input, so a backdrop tap only hides the keyboard; the close button still closes.
+ */
+export function Sheet({ visible = true, close, title, children, footer, dirty = false }: { visible?: boolean; close: () => void; title: string; children: React.ReactNode; footer?: React.ReactNode; dirty?: boolean }) {
+  const insets = useSafeAreaInsets();
   // The dim backdrop fades in (Modal "fade") while only the panel slides up.
   return <Modal visible={visible} transparent animationType="fade" onRequestClose={close} statusBarTranslucent navigationBarTranslucent>
     <KeyboardAvoidingView behavior="padding" className="flex-1 justify-end bg-[#0B2523AA]">
-      <Pressable onPress={close} className="absolute inset-0" accessibilityLabel="Cerrar" />
-      <Animated.View entering={SlideInDown.duration(280)} className="max-h-[92%] rounded-t-[28px] bg-panel px-5 pb-8 pt-3">
-        <View className="mb-3 h-1.5 w-10 self-center rounded-full bg-line" />
+      <Pressable accessible={false} onPress={dirty ? Keyboard.dismiss : close} className="absolute inset-0" />
+      <Animated.View entering={SlideInDown.duration(280)} style={{ paddingBottom: Math.max(32, insets.bottom + 16) }} className="max-h-[92%] rounded-t-[28px] bg-panel px-5 pt-5">
         <View className="mb-4 flex-row items-center justify-between gap-3">
           <Text accessibilityRole="header" className="flex-1 font-heavy text-xl text-ink">{title}</Text>
-          <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Cerrar" className="h-11 w-11 items-center justify-center rounded-full bg-canvas active:opacity-70"><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
+          <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Cerrar" className="h-12 w-12 items-center justify-center rounded-full bg-canvas active:opacity-70"><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
         </View>
         <ScrollView keyboardShouldPersistTaps="handled">{children}</ScrollView>
+        {footer ? <View className="pt-3">{footer}</View> : null}
       </Animated.View>
     </KeyboardAvoidingView>
   </Modal>;

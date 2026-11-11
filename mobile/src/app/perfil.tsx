@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, View } from 'react-native';
+import { Alert, Linking, Pressable, View } from 'react-native';
 
-import { Button, Card, CardHeading, colors, Field, FormError, Page, Text } from '@/components/ui';
+import { Button, Card, CardHeading, colors, Field, FormError, Page, SmallLink, Text } from '@/components/ui';
 import { useAppData } from '@/data-context';
 import { api, ApiError } from '@/lib/api';
+import { config } from '@/lib/config';
 import { formatCOP, parsePesos } from '@/lib/money';
 import { loadSession } from '@/lib/session';
 import { useSession } from '@/session-context';
@@ -17,19 +19,24 @@ export default function Perfil() {
   const [user, setUser] = useState({ email: '', name: '' });
   const [threshold, setThreshold] = useState(summary ? String(summary.antThresholdMinor / 100) : '');
   const [withdraw, setWithdraw] = useState('');
+  const [report, setReport] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  // Each error shows inside the card whose action failed.
+  type Place = 'vault' | 'plan' | 'feedback' | 'session';
+  const [error, setError] = useState<{ at: Place; message: string } | null>(null);
+  const errorAt = (at: Place) => (error?.at === at ? error.message : '');
   useEffect(() => void loadSession().then(s => setUser({ email: s?.username ?? '', name: s?.name ?? '' })), []);
 
-  async function run(fn: () => Promise<unknown>, done: string, messageFor: (e: unknown) => string = () => t.common.genericError) {
+  async function run(at: Place, fn: () => Promise<unknown>, done: string, messageFor: (e: unknown) => string = () => t.common.genericError) {
     setBusy(true);
-    setError('');
+    setError(null);
     try {
       await fn();
       notify(done);
       refresh();
     } catch (e) {
-      setError(messageFor(e));
+      setError({ at, message: messageFor(e) });
     } finally {
       setBusy(false);
     }
@@ -37,23 +44,26 @@ export default function Perfil() {
 
   const saveThreshold = () => {
     const antThresholdMinor = parsePesos(threshold);
-    if (antThresholdMinor && antThresholdMinor !== summary?.antThresholdMinor) run(() => api('PATCH', '/api/me', { antThresholdMinor }), t.settings.antSaved);
+    if (!antThresholdMinor) return setError({ at: 'plan', message: 'Escribe un valor mayor a cero.' });
+    if (antThresholdMinor !== summary?.antThresholdMinor) run('plan', () => api('PATCH', '/api/me', { antThresholdMinor }), t.settings.antSaved);
   };
   const doWithdraw = () => {
     const amountMinor = parsePesos(withdraw);
-    if (amountMinor) run(async () => (await api('POST', '/api/vault/withdraw', { amountMinor }), setWithdraw('')), 'Retiro registrado.',
+    if (amountMinor) run('vault', async () => (await api('POST', '/api/vault/withdraw', { amountMinor }), setWithdraw('')), 'Retiro registrado.',
       e => e instanceof ApiError && e.code === 'insufficient_vault' ? t.vault.insufficient : t.common.genericError);
   };
+  const sendReport = () => run('feedback', async () => (await api('POST', '/api/feedback', { message: report, appVersion: Constants.expoConfig?.version }), setReport('')), t.feedback.sent);
   const confirmDelete = () => Alert.alert(t.settings.deleteConfirmTitle, t.settings.deleteConfirmBody, [
     { text: t.common.cancel, style: 'cancel' },
     { text: t.settings.deleteConfirm, style: 'destructive', onPress: async () => {
-      setBusy(true);
+      setDeleting(true);
+      setError(null);
       try {
         await api('DELETE', '/api/me');
         await signOut();
       } catch {
-        setError(t.common.genericError);
-        setBusy(false);
+        setError({ at: 'session', message: t.common.genericError });
+        setDeleting(false);
       }
     } },
   ]);
@@ -76,21 +86,31 @@ export default function Perfil() {
       <CardHeading title={t.vault.title} subtitle={t.vault.intro} />
       <Text className="mb-4 font-heavy text-[28px] text-ink">{formatCOP(summary?.vaultBalanceMinor ?? 0)}</Text>
       <Button label={t.vault.deposit} icon="arrow-up-circle-outline" onPress={() => openSheet('saving')} className="mb-4 w-full" />
-      <Field label={`${t.vault.withdraw} (${t.vault.amount.toLowerCase()})`} prefix="$" value={withdraw} onChangeText={setWithdraw} keyboardType="number-pad" placeholder="0" />
+      <Field label={`${t.vault.withdraw} (${t.vault.amount.toLowerCase()})`} money value={withdraw} onChangeText={setWithdraw} placeholder="0" />
+      <FormError message={errorAt('vault')} />
       <Button label={t.vault.withdraw} variant="secondary" onPress={doWithdraw} disabled={busy || !parsePesos(withdraw)} className="w-full" />
     </Card>
 
     <Card className="mb-5">
       <CardHeading title="Plan y alertas" />
       <Button label="Ajustar mi plan" variant="secondary" onPress={() => openSheet('plan')} className="mb-4 w-full" />
-      <Field label={t.settings.antThreshold} prefix="$" value={threshold} onChangeText={setThreshold} keyboardType="number-pad" onEndEditing={saveThreshold} helper="Las compras de este valor o menos que se repiten cuentan como gasto hormiga." />
+      <Field label={t.settings.antThreshold} money value={threshold} onChangeText={setThreshold} onEndEditing={saveThreshold} helper="Las compras de este valor o menos que se repiten cuentan como gasto hormiga." />
+      <FormError message={errorAt('plan')} />
     </Card>
 
-    <FormError message={error} />
+    <Card className="mb-5">
+      <CardHeading title={t.feedback.title} subtitle={t.feedback.intro} />
+      <Field label={t.feedback.label} value={report} onChangeText={setReport} placeholder={t.feedback.placeholder} multiline maxLength={2000} autoCapitalize="sentences" textAlignVertical="top" style={{ minHeight: 96, paddingVertical: 12 }} />
+      <FormError message={errorAt('feedback')} />
+      <Button label={t.feedback.send} variant="secondary" icon="bug-outline" onPress={sendReport} disabled={busy || !report.trim()} className="mb-4 w-full" />
+      <SmallLink label={t.consent.policy} onPress={() => void Linking.openURL(`${config.apiUrl}/privacy.html`)} />
+    </Card>
+
     <Card>
       <CardHeading title="Sesión" />
-      <Button label={t.settings.signOut} variant="ghost" icon="log-out-outline" onPress={signOut} className="mb-2 w-full" />
-      <Button label={t.settings.delete} variant="danger" icon="trash-outline" onPress={confirmDelete} busy={busy} className="w-full" />
+      <Button label={t.settings.signOut} variant="ghost" icon="log-out-outline" onPress={signOut} className="mb-6 w-full" />
+      <FormError message={errorAt('session')} />
+      <Button label={t.settings.delete} variant="danger" icon="trash-outline" onPress={confirmDelete} busy={deleting} disabled={busy} className="w-full" />
     </Card>
   </Page>;
 }
