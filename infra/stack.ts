@@ -69,6 +69,9 @@ export class FinanceStack extends Stack {
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
       passwordPolicy: { minLength: 8, requireLowercase: true, requireUppercase: true, requireDigits: true, requireSymbols: true },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      // given_name/family_name are standard attributes (no schema entry needed). Custom attributes can be
+      // added to a live pool but never changed or removed, so keep this one generic.
+      customAttributes: { institution: new cognito.StringAttribute({ minLen: 1, maxLen: 100, mutable: true }) },
       removalPolicy: RemovalPolicy.DESTROY,
     });
     const userPoolClient = userPool.addClient("WebClient", {

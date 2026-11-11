@@ -20,6 +20,13 @@ export const t = {
     signUpTitle: 'Crea tu cuenta',
     signUp: 'Crear cuenta',
     passwordHint: 'Mínimo 8 caracteres con mayúscula, minúscula, número y símbolo.',
+    givenName: 'Nombre',
+    familyName: 'Apellido',
+    institution: 'Institución',
+    institutionPick: 'Elige tu institución',
+    passwordMissing: (rules: string[]) => `A tu contraseña le falta: ${rules.join(', ')}.`,
+    showPassword: 'Mostrar contraseña',
+    hidePassword: 'Ocultar contraseña',
     codeSent: (email: string) => `Te enviamos un código a ${email}.`,
     confirm: 'Confirmar',
     resend: 'Reenviar código',
@@ -163,3 +170,6 @@ export const t = {
 } as const;
 
 export const CONSENT_VERSION = '2026-11';
+
+/** Institutions offered at sign-up (stored in Cognito custom:institution). Add more here. */
+export const INSTITUTIONS = ['Universidad de La Sabana'] as const;

@@ -22,6 +22,8 @@ export class CognitoError extends Error {
 
 export interface Tokens {
   username: string;
+  /** given_name from the ID token; missing for sessions saved before sign-up asked for it. */
+  name?: string;
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
@@ -47,13 +49,26 @@ function cb<T>(run: (done: (err: any, result?: T) => void) => void): Promise<T> 
 
 const toTokens = (username: string, s: CognitoUserSession): Tokens => ({
   username,
+  name: s.getIdToken().payload.given_name,
   accessToken: s.getAccessToken().getJwtToken(),
   refreshToken: s.getRefreshToken().getToken(),
   expiresAt: s.getAccessToken().getExpiration() * 1000,
 });
 
-export const signUp = (email: string, password: string) =>
-  cb((done) => pool.signUp(email, password, [new CognitoUserAttribute({ Name: 'email', Value: email })], [], done));
+export interface Profile { givenName: string; familyName: string; institution: string }
+
+export const signUp = (email: string, password: string, p: Profile) =>
+  cb((done) =>
+    pool.signUp(
+      email,
+      password,
+      Object.entries({ email, given_name: p.givenName, family_name: p.familyName, 'custom:institution': p.institution }).map(
+        ([Name, Value]) => new CognitoUserAttribute({ Name, Value }),
+      ),
+      [],
+      done,
+    ),
+  );
 export const confirmSignUp = (email: string, code: string) => cb((done) => user(email).confirmRegistration(code, true, done));
 export const resendCode = (email: string) => cb((done) => user(email).resendConfirmationCode(done));
 export const forgotPassword = (email: string) =>
