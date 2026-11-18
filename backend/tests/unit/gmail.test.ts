@@ -23,10 +23,12 @@ const ALERT = { id: "g1", payload: { headers: [{ name: "Subject", value: "Alerta
 const CREDIT = { id: "g2", payload: { headers: [{ name: "Subject", value: "Recibiste" }], mimeType: "text/html", body: { data: b64("<p>Recibiste $50.000 de JUAN</p>") } } };
 
 /** Fake Google: token endpoint, profile, search and message fetch. */
-function fakeGoogle(opts: { invalidGrant?: boolean } = {}) {
+function fakeGoogle(opts: { invalidGrant?: boolean; flaky?: boolean } = {}) {
+  let failed = false;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any) => {
     const url = String(input);
     const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
+    if (opts.flaky && !failed) return (failed = true), json({ error: { code: 503 } }, 503);
     if (url.includes("oauth2.googleapis.com/token"))
       return opts.invalidGrant ? json({ error: "invalid_grant" }, 400) : json({ access_token: "at", refresh_token: "rt", scope: "https://www.googleapis.com/auth/gmail.readonly" });
     if (url.endsWith("/profile")) return json({ emailAddress: "me@gmail.com" });
@@ -116,6 +118,12 @@ describe("gmail sync in ingest-worker", () => {
     expect(await ingest(sqs)).toEqual({ batchItemFailures: [] });
     const txns = written().filter((i) => String(i.SK).startsWith("TXN#"));
     expect(txns).toEqual([expect.objectContaining({ amountMinor: 2_500_000, category: "food", origin: "email", accountId: "A", date: "2026-11-15" })]);
+  });
+
+  it("retries a transient Google 503", async () => {
+    fakeGoogle({ flaky: true });
+    expect(await ingest(sqs)).toEqual({ batchItemFailures: [] });
+    expect(written().some((i) => String(i.SK).startsWith("TXN#"))).toBe(true);
   });
 
   it("fails the job with a reconnect message when Google access expired", async () => {

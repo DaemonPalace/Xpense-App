@@ -32,6 +32,19 @@ export function decrypt(sealed: string): string {
   return Buffer.concat([d.update(data), d.final()]).toString("utf8");
 }
 
+/** fetch with a 10 s timeout and 3 tries on network errors / 5xx: Google occasionally hangs or answers 503. */
+async function gfetch(url: string, init: RequestInit = {}): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(10_000) });
+      if (res.status < 500 || attempt === 3) return res;
+    } catch (e) {
+      if (attempt === 3) throw e;
+    }
+    await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+  }
+}
+
 // ---- OAuth ----
 export function authUrl(state: string): string {
   const q = new URLSearchParams({
@@ -47,14 +60,14 @@ export function authUrl(state: string): string {
 }
 
 async function token(params: Record<string, string>): Promise<any> {
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await gfetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID!, client_secret: process.env.GOOGLE_CLIENT_SECRET!, ...params }),
   });
   const body: any = await res.json().catch(() => ({}));
   if (body.error === "invalid_grant") throw new GmailAuthError("Gmail access expired or was revoked — reconnect Gmail");
-  if (!res.ok) throw new Error(`Google token endpoint ${res.status}: ${body.error ?? ""}`);
+  if (!res.ok) throw new Error(`Google token endpoint ${res.status}: ${JSON.stringify(body.error ?? "").slice(0, 200)}`);
   return body;
 }
 
@@ -73,7 +86,7 @@ export async function revoke(refreshToken: string): Promise<void> {
 
 // ---- Gmail API ----
 async function gmail(access: string, path: string): Promise<any> {
-  const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`, { headers: { authorization: `Bearer ${access}` } });
+  const res = await gfetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`, { headers: { authorization: `Bearer ${access}` } });
   if (res.status === 401 || res.status === 403) throw new GmailAuthError("Gmail access expired or was revoked — reconnect Gmail");
   if (!res.ok) throw new Error(`Gmail API ${res.status}`);
   return res.json();
