@@ -1,8 +1,7 @@
 import '../../global.css';
 
 import {
-  PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold,
-  PlusJakartaSans_700Bold, PlusJakartaSans_800ExtraBold, useFonts,
+  PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, useFonts,
 } from '@expo-google-fonts/plus-jakarta-sans';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -27,7 +26,6 @@ function Nav() {
   const { status } = useSession();
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold,
-    PlusJakartaSans_700Bold, PlusJakartaSans_800ExtraBold,
   });
   const ready = status !== 'loading' && (fontsLoaded || !!fontError);
   useEffect(() => {

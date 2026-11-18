@@ -76,9 +76,9 @@ export const t = {
     remaining: (v: string, days: number) => `Te quedan ${v} para ${days} ${days === 1 ? 'día' : 'días'}`,
     used: (pct: number) => `Has usado el ${pct}% de lo que puedes gastar este mes`,
     goal: (saved: string, goal: string) => `Ahorro del mes: ${saved} de ${goal}`,
-    warning: 'Vas rápido: cuida tus gastos para cumplir tu meta.',
-    overToday: 'Hoy ya pasaste tu límite diario.',
-    over: (v: string) => `Tu meta de ahorro está en riesgo: te pasaste ${v}.`,
+    warning: 'Vas rápido: cuida tus gastos para cumplir tu meta',
+    overToday: 'Hoy ya pasaste tu límite diario',
+    over: (v: string) => `Tu meta de ahorro está en riesgo: te pasaste ${v}`,
     add: 'Registrar gasto',
     addIncome: 'Registrar ingreso',
     settings: 'Ajustes',
@@ -95,7 +95,7 @@ export const t = {
     vault: (v: string) => `En la caja fuerte: ${v}`,
     ant: 'Gastos hormiga',
     antSummary: (n: number, v: string) => `${n} compras pequeñas repetidas por ${v} este mes`,
-    antNone: 'Sin gastos hormiga este mes. ¡Bien!',
+    antNone: 'Sin gastos hormiga este mes',
     empty: 'Aún no hay gastos este mes.',
   },
   movements: {
@@ -175,7 +175,7 @@ export const t = {
     label: '¿Qué pasó?',
     placeholder: 'Ej. Registré un gasto y no apareció en Hoy.',
     send: 'Enviar reporte',
-    sent: 'Reporte enviado. ¡Gracias!',
+    sent: 'Reporte enviado, gracias',
   },
 } as const;
 
