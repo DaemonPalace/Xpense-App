@@ -4,6 +4,7 @@ import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { S3Client } from "@aws-sdk/client-s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { AdminDeleteUserCommand, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
+import { createHash, randomBytes } from "node:crypto";
 import { ulid } from "ulid";
 import { HttpError, requireOrigin, requireUser } from "./lib/auth";
 import { acctSk, activePk, aggSk, ddb, forecastSk, jobSk, profileSk, queryAll, TABLE, txnSk, userPk, type Item } from "./lib/db";
@@ -12,6 +13,8 @@ import { MAX_ABS_MINOR } from "./lib/money";
 import { antExpenses, DEFAULT_ANT_THRESHOLD_MINOR } from "./lib/ant";
 import { localToday, summarize } from "./lib/summary";
 import { toDto, toItem, validateTransactionInput, type TransactionInput } from "./lib/transactions";
+import { htmlToText, parseBankMail } from "./lib/mail";
+import { categorize } from "./lib/categorize";
 
 const sqs = new SQSClient({});
 const s3 = new S3Client({});
@@ -19,7 +22,10 @@ const cognito = new CognitoIdentityProviderClient({});
 
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const ACCOUNT_TYPES = ["checking", "credit_card", "savings"];
-const SOURCES = ["simulated", "csv"];
+const SOURCES = ["simulated", "csv", "email"];
+const MAIL_HOOK = /^\/api\/hooks\/mail\/([A-Za-z0-9_-]{43})$/;
+const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
+const hookKey = (token: string) => ({ PK: `MAILHOOK#${sha256(token)}`, SK: "MAILHOOK" });
 
 interface Ctx {
   user: { sub: string; email?: string };
@@ -317,7 +323,7 @@ const routes: [string, string, Handler][] = [
     const { name, type, source } = ctx.body ?? {};
     if (typeof name !== "string" || name.trim().length < 1 || name.length > 60) throw badRequest("name must be 1–60 chars");
     if (!ACCOUNT_TYPES.includes(type)) throw badRequest("type must be checking, credit_card or savings");
-    if (!SOURCES.includes(source)) throw badRequest("source must be simulated or csv");
+    if (!SOURCES.includes(source)) throw badRequest("source must be simulated, csv or email");
     await touchProfile(ctx);
     const accountId = ulid();
     const account: Item = {
@@ -327,6 +333,13 @@ const routes: [string, string, Handler][] = [
     };
     if (source === "csv") {
       await ddb.send(new PutCommand({ TableName: TABLE, Item: account }));
+      return { status: 201, body: { account: accountDto(account), job: null } };
+    }
+    if (source === "email") {
+      // The token is the webhook credential Zapier/Make posts with; only its hash is indexed.
+      account.mailToken = randomBytes(32).toString("base64url");
+      const hook = { ...hookKey(account.mailToken), userId: ctx.user.sub, accountId };
+      await ddb.send(new TransactWriteCommand({ TransactItems: [{ Put: { TableName: TABLE, Item: account } }, { Put: { TableName: TABLE, Item: hook } }] }));
       return { status: 201, body: { account: accountDto(account), job: null } };
     }
     const job = newJob(ctx, accountId, "sync", "queued");
@@ -369,6 +382,7 @@ const routes: [string, string, Handler][] = [
     if (deleteTransactions !== "true" && deleteTransactions !== "false") throw badRequest("deleteTransactions must be true or false");
     // Queue the bulk delete before removing the account so a crash can't orphan the request.
     if (deleteTransactions === "true") await sendIngest({ kind: "deleteAccountData", userId: ctx.user.sub, accountId: account.accountId, correlationId: ctx.correlationId });
+    if (account.mailToken) await ddb.send(new DeleteCommand({ TableName: TABLE, Key: hookKey(account.mailToken) }));
     await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: pk(ctx), SK: account.SK } }));
     return { status: 204 };
   }],
@@ -560,6 +574,57 @@ function respond(status: number, body: unknown, correlationId: string): APIGatew
   };
 }
 
+/** Body from Zapier/Make: JSON or form-encoded; accepts their Gmail field names. */
+function mailBody(event: APIGatewayProxyEventV2): Record<string, string> {
+  const raw = event.body ? (event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body) : "";
+  const type = event.headers?.["content-type"] ?? "";
+  if (type.includes("application/x-www-form-urlencoded")) return Object.fromEntries(new URLSearchParams(raw));
+  try {
+    const b = JSON.parse(raw);
+    return b && typeof b === "object" ? b : {};
+  } catch {
+    throw badRequest("Body must be JSON or form-encoded");
+  }
+}
+
+/** POST /api/hooks/mail/:token — one bank alert e-mail → one expense (idempotent per message id). */
+async function mailHook(event: APIGatewayProxyEventV2, token: string, correlationId: string): Promise<Result> {
+  const hook = await getItem(hookKey(token).PK, hookKey(token).SK);
+  if (!hook) throw new HttpError(401, "unauthorized", "Unknown webhook token");
+  const PK = userPk(hook.userId);
+  const profile = await getItem(PK, profileSk());
+  if (!profile?.consentVersion) throw new HttpError(403, "consent_required", "Accept the data processing policy first");
+  const b = mailBody(event);
+  const str = (...keys: string[]) => keys.map((k) => b[k]).find((v) => typeof v === "string" && v.trim()) as string | undefined;
+  const html = str("html", "body_html", "bodyHtml");
+  const parsed = parseBankMail({
+    subject: str("subject"),
+    body: str("body", "text", "body_plain", "bodyPlain", "snippet") ?? (html ? htmlToText(html) : ""),
+    date: str("date", "received", "receivedAt"),
+  });
+  if (!parsed) return { status: 200, body: { imported: false, reason: "not a debit alert" } }; // 200: Zapier must not retry
+  const messageId = str("messageId", "message_id", "id");
+  const txnId = sha256(`${hook.accountId}|${messageId ?? `${parsed.date}|${parsed.amountMinor}|${parsed.description}`}`);
+  const category = categorize(parsed.description);
+  const input: TransactionInput = { ...parsed, type: category === "savings" ? "savings" : "expense", category, accountId: hook.accountId };
+  const item = toItem(hook.userId, input, "email", correlationId, { txnId, fingerprint: txnId });
+  try {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          { Put: { TableName: TABLE, Item: item, ConditionExpression: "attribute_not_exists(SK)" } },
+          { Update: { TableName: TABLE, Key: { PK, SK: profileSk() }, UpdateExpression: "SET lastTxnChangeAt = :t, hasTransactions = :y", ExpressionAttributeValues: { ":t": now(), ":y": true } } },
+          { Update: { TableName: TABLE, Key: { PK, SK: acctSk(hook.accountId) }, UpdateExpression: "SET #s = :synced, lastSyncedAt = :t", ConditionExpression: "attribute_exists(SK)", ExpressionAttributeNames: { "#s": "status" }, ExpressionAttributeValues: { ":synced": "synced", ":t": now() } } },
+        ],
+      }),
+    );
+  } catch (e) {
+    if (isConditionFail(e)) return { status: 200, body: { imported: false, reason: "duplicate" } };
+    throw e;
+  }
+  return { status: 201, body: { imported: true, transaction: toDto(item) } };
+}
+
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> {
   const headers = event.headers ?? {};
   const correlationId = withCorrelation(headers["x-correlation-id"]);
@@ -567,6 +632,12 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.rawPath;
   try {
     requireOrigin(headers);
+    const hook = method === "POST" && MAIL_HOOK.exec(path);
+    if (hook) {
+      const res = await mailHook(event, hook[1], correlationId);
+      log("info", "request", { correlationId, method, route: "/api/hooks/mail/:token", status: res.status });
+      return respond(res.status, res.body, correlationId);
+    }
     const user = await requireUser(headers);
     for (const r of compiled) {
       const m = r.method === method && r.re.exec(path);
@@ -594,7 +665,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
       if (err.status >= 500 || err.status === 403) log("warn", "request rejected", { correlationId, method, status: err.status });
       return respond(err.status, { error: { code: err.code, message: err.message, details: (err as any).details } }, correlationId);
     }
-    log("error", "request failed", { correlationId, method, path, ...errorFields(err) });
+    log("error", "request failed", { correlationId, method, path: path.replace(MAIL_HOOK, "/api/hooks/mail/:token"), ...errorFields(err) });
     return respond(500, { error: { code: "internal", message: "Something went wrong" } }, correlationId);
   }
 }

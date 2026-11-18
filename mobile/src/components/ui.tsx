@@ -234,7 +234,7 @@ export function IconTile({ icon, background, color, size = 40 }: { icon: IconNam
   return <View style={{ backgroundColor: background, width: size, height: size }} className="items-center justify-center rounded-xl"><Ionicons name={icon} size={20} color={color} /></View>;
 }
 
-const ORIGIN: Record<Transaction['origin'], string> = { manual: '', sync: ' · Banco', csv: ' · CSV', vault: ' · Caja fuerte' };
+const ORIGIN: Record<Transaction['origin'], string> = { manual: '', sync: ' · Banco', csv: ' · CSV', email: ' · Correo', vault: ' · Caja fuerte' };
 
 /** With `onDelete` every row gets a trash button. */
 export function TransactionList({ items, empty = t.movements.empty, ant, onDelete }: { items: Transaction[]; empty?: string; ant?: Set<string>; onDelete?: (item: Transaction) => void }) {

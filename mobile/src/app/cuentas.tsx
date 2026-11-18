@@ -1,11 +1,12 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, View } from 'react-native';
+import { Alert, Share, View } from 'react-native';
 
 import { Button, Callout, Card, CardHeading, Chip, FormError, IconTile, Page, SmallLink, Text } from '@/components/ui';
 import { useAppData } from '@/data-context';
 import { api, waitForJob, type Account, type Job } from '@/lib/api';
+import { config } from '@/lib/config';
 import { t } from '@/strings';
 
 export default function Cuentas() {
@@ -70,6 +71,12 @@ export default function Cuentas() {
     });
   };
 
+  const createMailHook = () => withJob(async () => {
+    await api('POST', '/api/accounts', { name: t.accounts.mailAccountName, type: 'checking', source: 'email' });
+    return null;
+  });
+  const hookUrl = (a: Account) => `${config.apiUrl}/api/hooks/mail/${a.mailToken}`;
+
   const sync = (a: Account) => withJob(async () => (await api<Job>('POST', `/api/accounts/${a.accountId}/sync`)).jobId);
   const unlink = (a: Account) => Alert.alert(t.accounts.unlinkTitle, a.name, [
     { text: t.common.cancel, style: 'cancel' },
@@ -81,7 +88,7 @@ export default function Cuentas() {
     <Text className="mb-5 text-sm leading-5 text-muted">{t.accounts.intro}</Text>
     {accounts.map(a => <Card key={a.accountId} className="mb-3">
       <View className="flex-row items-center gap-3">
-        <IconTile icon={a.source === 'csv' ? 'document-text-outline' : a.type === 'credit_card' ? 'card-outline' : 'business-outline'} background="#DDF3EF" color="#0F766E" />
+        <IconTile icon={a.source === 'csv' ? 'document-text-outline' : a.source === 'email' ? 'mail-outline' : a.type === 'credit_card' ? 'card-outline' : 'business-outline'} background="#DDF3EF" color="#0F766E" />
         <View className="flex-1">
           <Text className="font-strong text-[15px] text-ink">{a.name}</Text>
           {a.lastSyncedAt ? <Text className="text-xs text-muted">{t.accounts.lastSync(new Date(a.lastSyncedAt).toLocaleString('es-CO'))}</Text> : null}
@@ -89,6 +96,11 @@ export default function Cuentas() {
         </View>
         <Chip label={t.accounts.status[a.status] ?? a.status} tone={a.status === 'failed' ? 'amber' : a.status === 'synced' ? 'green' : 'brand'} />
       </View>
+      {a.source === 'email' && a.mailToken ? <View className="mt-3">
+        <Text className="text-xs text-muted">{t.accounts.mailUrl}</Text>
+        <Text selectable className="mt-1 text-xs text-ink">{hookUrl(a)}</Text>
+        <SmallLink button label={t.accounts.mailShare} onPress={() => Share.share({ message: hookUrl(a) })} />
+      </View> : null}
       <View className="mt-2 flex-row justify-between gap-4">
         {a.source === 'simulated' && !busy && a.status !== 'syncing' ? <SmallLink button label={t.accounts.sync} onPress={() => sync(a)} /> : <View />}
         {!busy ? <SmallLink button danger label={t.accounts.unlink} onPress={() => unlink(a)} /> : null}
@@ -103,6 +115,11 @@ export default function Cuentas() {
       <Button label={t.accounts.connectChecking} icon="business-outline" onPress={() => connect('checking')} busy={busy} className="mb-3 w-full" />
       <Button label={t.accounts.connectCard} icon="card-outline" variant="secondary" onPress={() => connect('credit_card')} disabled={busy} className="w-full" />
     </Card>
+    {!accounts.some(a => a.source === 'email') ? <Card className="mb-5">
+      <CardHeading title={t.accounts.mailTitle} subtitle={t.accounts.mailHint} />
+      <Text className="mb-3 text-xs leading-5 text-muted">{t.accounts.mailSteps}</Text>
+      <Button label={t.accounts.mailCreate} icon="mail-outline" onPress={createMailHook} disabled={busy} className="w-full" />
+    </Card> : null}
     <Card>
       <CardHeading title={t.accounts.importCsv} subtitle={t.accounts.csvHint} />
       <Button label="Elegir archivo" icon="document-attach-outline" variant="secondary" onPress={importCsv} disabled={busy} className="w-full" />

@@ -129,6 +129,13 @@ export const t = {
     jobDone: (i: number, s: number, r: number) => `Listo: ${i} importados, ${s} duplicados omitidos, ${r} rechazados.`,
     jobFailed: () => 'No se pudo procesar. Inténtalo de nuevo.', // backend reasons are internal English text
     empty: 'Aún no tienes cuentas conectadas.',
+    mailTitle: 'Alertas del banco por correo',
+    mailHint: 'Tus compras reales llegan solas: Zapier o Make leen las alertas de tu banco en Gmail y las envían a Xpense.',
+    mailCreate: 'Crear enlace para Zapier / Make',
+    mailAccountName: 'Mi banco (correo)',
+    mailUrl: 'Enlace del webhook (pégalo en Zapier o Make, no lo compartas):',
+    mailShare: 'Copiar / compartir enlace',
+    mailSteps: '1. Zapier: Gmail «New Email Matching Search» con from:(bancolombia OR nequi OR davivienda).\n2. Webhooks by Zapier · POST a este enlace con subject, body_plain, date y message_id.\n3. Cada compra aparece en Movimientos.',
   },
   vault: {
     title: 'Caja fuerte',
