@@ -73,8 +73,7 @@ export interface Account {
   accountId: string;
   name: string;
   type: 'checking' | 'credit_card' | 'savings';
-  source: 'simulated' | 'csv' | 'email';
-  mailToken?: string;
+  source: 'simulated' | 'csv' | 'gmail';
   status: 'linked' | 'syncing' | 'synced' | 'failed';
   lastSyncedAt: string | null;
   failureReason: string | null;

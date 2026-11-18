@@ -1,4 +1,5 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { ulid } from "ulid";
 import { BatchWriteCommand, DynamoDBDocumentClient, QueryCommand, type QueryCommandInput } from "@aws-sdk/lib-dynamodb";
 
 export const TABLE = process.env.TABLE_NAME ?? "FinanceTable";
@@ -13,6 +14,19 @@ export const txnSk = (date: string, id: string) => `TXN#${date}#${id}`;
 export const aggSk = (month: string) => `AGG#${month}`;
 export const forecastSk = () => "FORECAST";
 export const activePk = (yyyymm: string) => `ACTIVE#${yyyymm}`;
+export const gmailSk = () => "GMAIL"; // USER#… / GMAIL: encrypted refresh token + accountId
+export const GMAIL_USERS = "GMAIL"; // GMAIL / USER#…: one marker per connected user, scanned by the poller
+
+/** Background job record; inserting it with status "queued" makes stream-router enqueue it. */
+export function jobItem(userId: string, accountId: string, kind: "sync" | "csv", status: "queued" | "awaiting_upload", correlationId: string): Item {
+  const jobId = ulid();
+  return {
+    PK: userPk(userId), SK: jobSk(jobId), jobId, accountId, kind, status,
+    imported: 0, skipped: 0, rejected: 0, rejections: [],
+    uploadKey: kind === "csv" ? `uploads/${userId}/${jobId}.csv` : null,
+    correlationId, lastCorrelationId: correlationId, createdAt: new Date().toISOString(),
+  };
+}
 
 export type Item = Record<string, any>;
 

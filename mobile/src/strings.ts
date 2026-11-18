@@ -129,13 +129,12 @@ export const t = {
     jobDone: (i: number, s: number, r: number) => `Listo: ${i} importados, ${s} duplicados omitidos, ${r} rechazados.`,
     jobFailed: () => 'No se pudo procesar. Inténtalo de nuevo.', // backend reasons are internal English text
     empty: 'Aún no tienes cuentas conectadas.',
-    mailTitle: 'Alertas del banco por correo',
-    mailHint: 'Tus compras reales llegan solas: Zapier o Make leen las alertas de tu banco en Gmail y las envían a Xpense.',
-    mailCreate: 'Crear enlace para Zapier / Make',
-    mailAccountName: 'Mi banco (correo)',
-    mailUrl: 'Enlace del webhook (pégalo en Zapier o Make, no lo compartas):',
-    mailShare: 'Copiar / compartir enlace',
-    mailSteps: '1. Zapier: Gmail «New Email Matching Search» con from:(bancolombia OR nequi OR davivienda).\n2. Webhooks by Zapier · POST a este enlace con subject, body_plain, date y message_id.\n3. Cada compra aparece en Movimientos.',
+    gmailTitle: 'Conectar Gmail',
+    gmailHint: 'Leemos solo las alertas de compra que tu banco te envía por correo. Traemos el último mes y luego revisamos cada 15 minutos',
+    gmailConnect: 'Conectar con Google',
+    gmailReconnect: 'Reconectar Gmail',
+    gmailUnavailable: 'La conexión con Gmail aún no está habilitada',
+    gmailCancelled: 'Conexión cancelada',
   },
   vault: {
     title: 'Caja fuerte',
@@ -186,7 +185,7 @@ export const t = {
   },
 } as const;
 
-export const CONSENT_VERSION = '2026-11';
+export const CONSENT_VERSION = '2026-11b'; // bumped for the Gmail data disclosure
 
 /** Institutions offered at sign-up (stored in Cognito custom:institution). Add more here. */
 export const INSTITUTIONS = ['Universidad de La Sabana'] as const;
