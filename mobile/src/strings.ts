@@ -135,6 +135,9 @@ export const t = {
     gmailReconnect: 'Reconectar Gmail',
     gmailUnavailable: 'La conexión con Gmail aún no está habilitada',
     gmailCancelled: 'Conexión cancelada',
+    ownBanks: 'Tus cuentas',
+    ownBanksHint: 'Lo que mueves entre estas cuentas no cuenta como gasto ni ingreso. Toca para marcar o desmarcar',
+    bankName: (key: string) => ({ RAPPIPAY: 'RappiPay', BBVA: 'BBVA', NU: 'Nu' } as Record<string, string>)[key] ?? key.charAt(0) + key.slice(1).toLowerCase(),
   },
   vault: {
     title: 'Caja fuerte',

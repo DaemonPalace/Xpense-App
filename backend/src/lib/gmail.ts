@@ -123,7 +123,7 @@ export function toMail(msg: any): MailInput & { id: string } {
   };
   walk(msg.payload);
   const date = header("date") ?? (msg.internalDate ? new Date(Number(msg.internalDate)).toISOString() : undefined);
-  return { id: msg.id, subject: header("subject"), body: plain.join("\n") || htmlToText(html.join("\n")), date };
+  return { id: msg.id, from: header("from"), subject: header("subject"), body: plain.join("\n") || htmlToText(html.join("\n")), date };
 }
 
 export async function fetchMails(access: string, ids: string[]): Promise<(MailInput & { id: string })[]> {

@@ -346,6 +346,45 @@ const routes: [string, string, Handler][] = [
     }
     return { status: 202, body: jobDto(job) };
   }],
+  ["PATCH", "/api/accounts/:accountId", async (ctx) => {
+    // Gmail accounts only: banks where the user has their own account. Moves between them are not spending or income.
+    const banks = ctx.body?.ownBanks;
+    if (!Array.isArray(banks) || banks.length > 30 || !banks.every((b) => typeof b === "string" && /^[A-Z0-9]{1,30}$/.test(b)))
+      throw badRequest("ownBanks must be up to 30 uppercase bank keys");
+    const account = await getItem(pk(ctx), acctSk(ctx.params.accountId));
+    if (!account || account.source !== "gmail") throw notFound();
+    const ownBanks = [...new Set(banks as string[])].sort();
+    // Re-import the backfill window with the new rules (worker deletes this account's mail-derived items first).
+    const job = { ...newJob(ctx, account.accountId, "sync", "queued"), rebuild: true };
+    try {
+      await ddb.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: TABLE,
+                Key: { PK: pk(ctx), SK: account.SK },
+                UpdateExpression: "SET ownBanks = :b, ownAccounts = :a, lastSyncedAt = :null, #s = :syncing, failureReason = :null",
+                ConditionExpression: "attribute_exists(SK) AND #s <> :syncing",
+                ExpressionAttributeNames: { "#s": "status" },
+                ExpressionAttributeValues: {
+                  ":b": ownBanks,
+                  ":a": (account.ownAccounts ?? []).filter((a: string) => ownBanks.includes(a.split(":")[0])),
+                  ":null": null,
+                  ":syncing": "syncing",
+                },
+              },
+            },
+            { Put: { TableName: TABLE, Item: job } },
+          ],
+        }),
+      );
+    } catch (e) {
+      if (isConditionFail(e)) throw new HttpError(409, "already_syncing", "This account is already syncing");
+      throw e;
+    }
+    return { status: 202, body: jobDto(job) };
+  }],
   ["DELETE", "/api/accounts/:accountId", async (ctx) => {
     const account = await getItem(pk(ctx), acctSk(ctx.params.accountId));
     if (!account) throw notFound();

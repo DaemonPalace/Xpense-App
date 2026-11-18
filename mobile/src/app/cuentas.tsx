@@ -5,7 +5,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Alert, View } from 'react-native';
 
-import { Button, Callout, Card, CardHeading, Chip, FormError, IconTile, Page, SmallLink, Text } from '@/components/ui';
+import { Button, Callout, Card, CardHeading, Chip, Choice, FormError, IconTile, Page, SmallLink, Text } from '@/components/ui';
 import { useAppData } from '@/data-context';
 import { api, ApiError, waitForJob, type Account, type Job } from '@/lib/api';
 import { t } from '@/strings';
@@ -90,6 +90,12 @@ export default function Cuentas() {
     });
   };
 
+  const toggleOwnBank = (a: Account, bank: string) => withJob(async () => {
+    const own = new Set(a.ownBanks ?? []);
+    if (own.has(bank)) own.delete(bank); else own.add(bank);
+    return (await api<Job>('PATCH', `/api/accounts/${a.accountId}`, { ownBanks: [...own] })).jobId;
+  });
+
   const sync = (a: Account) => withJob(async () => (await api<Job>('POST', `/api/accounts/${a.accountId}/sync`)).jobId);
   const unlink = (a: Account) => Alert.alert(t.accounts.unlinkTitle, a.name, [
     { text: t.common.cancel, style: 'cancel' },
@@ -109,6 +115,14 @@ export default function Cuentas() {
         </View>
         <Chip label={t.accounts.status[a.status] ?? a.status} tone={a.status === 'failed' ? 'amber' : a.status === 'synced' ? 'green' : 'brand'} />
       </View>
+      {a.source === 'gmail' && (a.seenBanks?.length || a.ownBanks?.length) ? <View className="mt-3">
+        <Text className="font-strong text-sm text-ink">{t.accounts.ownBanks}</Text>
+        <Text className="mb-2 text-xs leading-5 text-muted">{t.accounts.ownBanksHint}</Text>
+        <View className="flex-row flex-wrap gap-2">
+          {[...new Set([...(a.ownBanks ?? []), ...(a.seenBanks ?? [])])].sort().map(b =>
+            <Choice key={b} label={t.accounts.bankName(b)} selected={a.ownBanks?.includes(b) ?? false} onPress={() => !busy && a.status !== 'syncing' && toggleOwnBank(a, b)} />)}
+        </View>
+      </View> : null}
       <View className="mt-2 flex-row justify-between gap-4">
         {busy || a.status === 'syncing' ? <View /> : a.source === 'gmail' && a.status === 'failed' ? <SmallLink button label={t.accounts.gmailReconnect} onPress={connectGmail} /> : a.source !== 'csv' ? <SmallLink button label={t.accounts.sync} onPress={() => sync(a)} /> : <View />}
         {!busy ? <SmallLink button danger label={t.accounts.unlink} onPress={() => unlink(a)} /> : null}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bogotaDay, dropSelfTransfers, htmlToText, parseBankMail, parseCop, parseMovement } from "../../src/lib/mail";
+import { bogotaDay, htmlToText, isOwnMove, learnOwned, parseBankMail, parseCop, parseMovement } from "../../src/lib/mail";
 
 const date = "Sat, 15 Nov 2026 22:30:00 -0500";
 
@@ -54,9 +54,32 @@ describe("parseMovement (Nequi / RappiPay)", () => {
     expect(parseMovement({ subject: "🗽 ¿New York en la lista?", body: "Vuela a 0% de interés", date })).toBeNull();
   });
 
-  it("drops transfers between own accounts but keeps the rest", () => {
-    const rows = [rappiOut("42.000,00"), nequiIn("SANTIAGO PRIETO TRUJILLO", "42.000"), rappiOut("14.000,00"), nequiIn("PABLO BOADA", "30.000")].map((m) => parseMovement(m)!);
-    expect(dropSelfTransfers(rows).map((r) => r.description)).toEqual(["Transferencia a Nequi", "Recibiste de Pablo Boada"]);
-    expect(dropSelfTransfers(rows)[0].amountMinor).toBe(1_400_000);
+  const rappiIn = (amt: string) => ({ from: "RappiPay <noreply@rappipay.co>", subject: "Tu dinero ya está disponible.", body: `Monto recibido $${amt} Banco Nequi Nro. de transacción 1`, date });
+  const own = (msgs: object[], prev = { banks: [] as string[], accounts: [] as string[] }) => {
+    const rows = msgs.map((m) => parseMovement(m)!);
+    const owned = learnOwned(rows, prev);
+    return { owned, kept: rows.filter((r) => !isOwnMove(r, owned)).map((r) => `${r.description} ${r.amountMinor / 100}`) };
+  };
+
+  it("learns own wallets and account digits from a transfer to yourself", () => {
+    const { owned, kept } = own([
+      { ...rappiOut("42.000,00"), from: "noreply@rappipay.co" },
+      { ...nequiIn("SANTIAGO PRIETO TRUJILLO", "42.000"), from: "notificaciones@nequi.com.co" },
+      { ...nequiIn("PABLO BOADA", "30.000"), from: "notificaciones@nequi.com.co" },
+    ]);
+    expect(owned).toEqual({ banks: ["NEQUI", "RAPPIPAY"], accounts: ["NEQUI:6342"] });
+    expect(kept).toEqual(["Recibiste de Pablo Boada 30000"]);
+  });
+
+  it("treats unnamed money from an own bank as a move, not income (Nequi → RappiPay has no Nequi mail)", () => {
+    const { kept } = own([rappiIn("584.000")], { banks: ["NEQUI", "RAPPIPAY"], accounts: [] });
+    expect(kept).toEqual([]);
+    expect(own([rappiIn("584.000")]).kept).toEqual(["Recibiste desde Nequi 584000"]);
+  });
+
+  it("keeps a transfer to someone else's account at an own bank", () => {
+    const friend = { ...rappiOut("14.000,00"), body: rappiOut("14.000,00").body.replace("6342", "1111") };
+    expect(own([friend], { banks: ["NEQUI"], accounts: ["NEQUI:6342"] }).kept).toEqual(["Transferencia a Nequi 14000"]);
+    expect(own([rappiOut("14.000,00")], { banks: ["NEQUI"], accounts: ["NEQUI:6342"] }).kept).toEqual([]);
   });
 });

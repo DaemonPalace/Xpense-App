@@ -85,6 +85,17 @@ describe("gmail connect + callback", () => {
     expect(JSON.parse(ok.body!).url).toMatch(/^https:\/\/accounts\.google\.com\/.*access_type=offline/);
   });
 
+  it("editing own banks re-imports the Gmail account with the new rules", async () => {
+    items["USER#U|PROFILE"] = { consentVersion: "v1", lastActiveAt: new Date().toISOString() };
+    items["USER#U|ACCT#A"] = { PK: "USER#U", SK: "ACCT#A", accountId: "A", source: "gmail", ownBanks: ["NEQUI"], ownAccounts: ["NEQUI:6342", "DAVIPLATA:1"] };
+    expect((await req("PATCH", "/api/accounts/A", { body: JSON.stringify({ ownBanks: ["nequi"] }) })).statusCode).toBe(400);
+    const res = await req("PATCH", "/api/accounts/A", { body: JSON.stringify({ ownBanks: ["RAPPIPAY", "NEQUI"] }) });
+    expect(res.statusCode).toBe(202);
+    const tx = sent.find((x) => x.name === "TransactWriteCommand")!.input.TransactItems;
+    expect(tx[0].Update.ExpressionAttributeValues).toMatchObject({ ":b": ["NEQUI", "RAPPIPAY"], ":a": ["NEQUI:6342"], ":null": null });
+    expect(tx[1].Put.Item).toMatchObject({ kind: "sync", status: "queued", rebuild: true });
+  });
+
   it("rejects an unknown state", async () => {
     expect((await req("GET", "/api/gmail/callback", { queryStringParameters: { state: "nope", code: "c" } })).statusCode).toBe(400);
   });

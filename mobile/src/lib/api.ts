@@ -74,6 +74,8 @@ export interface Account {
   name: string;
   type: 'checking' | 'credit_card' | 'savings';
   source: 'simulated' | 'csv' | 'gmail';
+  ownBanks?: string[];
+  seenBanks?: string[];
   status: 'linked' | 'syncing' | 'synced' | 'failed';
   lastSyncedAt: string | null;
   failureReason: string | null;

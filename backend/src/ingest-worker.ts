@@ -3,7 +3,7 @@ import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateComma
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { acctSk, activePk, batchWriteAll, ddb, delReq, GMAIL_USERS, gmailSk, jobItem, jobSk, profileSk, putReq, queryAll, rawSk, TABLE, userPk, type Item } from "./lib/db";
 import { accessToken, BACKFILL_DAYS, decrypt, fetchMails, GmailAuthError, listMessageIds, revoke } from "./lib/gmail";
-import { dropSelfTransfers, parseMovement } from "./lib/mail";
+import { isOwnMove, learnOwned, parseMovement } from "./lib/mail";
 import { errorFields, log } from "./lib/log";
 import { generate, firstSyncStart, type AccountType } from "./lib/simulator";
 import { parseImport } from "./lib/csv";
@@ -75,6 +75,7 @@ async function ingest(msg: Msg, job: Item, account: Item) {
   let candidates: { input: TransactionInput; fingerprint: string }[];
   let rejections: { row: number; reason: string }[] = [];
   let incomes: Item[] = [];
+  let accountFields: Record<string, unknown> = {};
 
   if (msg.kind === "sync" && account.source === "gmail") {
     const g = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: gmailSk() } }))).Item;
@@ -95,7 +96,17 @@ async function ingest(msg: Msg, job: Item, account: Item) {
       return p ? [{ messageId: m.id, ...p }] : [];
     });
     raw = parsed;
-    const rows = dropSelfTransfers(parsed);
+    // Own-account moves are neither spending nor income; what we learn about the user's accounts is kept on the account.
+    const owned = learnOwned(parsed, { banks: account.ownBanks ?? [], accounts: account.ownAccounts ?? [] });
+    const seen = new Set<string>(account.seenBanks ?? []);
+    for (const r of parsed) [r.wallet, r.fromBank, r.toBank].forEach((b) => b && seen.add(b));
+    accountFields = { ownBanks: owned.banks, ownAccounts: owned.accounts, seenBanks: [...seen].sort() };
+    const rows = parsed.filter((r) => !isOwnMove(r, owned));
+    if (job.rebuild) {
+      // Ownership rules changed: re-import this account's mail-derived movements from scratch.
+      const old = [...(await queryAll(PK, "TXN#", { ProjectionExpression: "PK, SK, accountId" })), ...(await queryAll(PK, "INCOME#", { ProjectionExpression: "PK, SK, accountId" }))];
+      await deleteKeys(old.filter((i) => i.accountId === account.accountId));
+    }
     // Money received becomes a one-off income for that month (the app's income model), id = message fingerprint.
     incomes = rows.filter((r) => r.direction === "in").map((r) => {
       const id = syncFingerprint(account.accountId, r.messageId);
@@ -173,7 +184,7 @@ async function ingest(msg: Msg, job: Item, account: Item) {
   const finishedAt = now();
   if (toWrite.length) await update(PK, profileSk(), { lastTxnChangeAt: finishedAt, hasTransactions: true });
   await update(PK, job.SK, { status: "succeeded", imported: toWrite.length + incomesAdded, skipped, rejected: rejections.length, rejections: rejections.slice(0, 50), finishedAt });
-  await update(PK, account.SK, { status: "synced", lastSyncedAt: finishedAt, failureReason: null });
+  await update(PK, account.SK, { status: "synced", lastSyncedAt: finishedAt, failureReason: null, ...accountFields });
   log("info", "ingest succeeded", { correlationId: msg.correlationId, jobId: job.jobId, imported: toWrite.length, incomes: incomesAdded, skipped, rejected: rejections.length });
 }
 

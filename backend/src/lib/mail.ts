@@ -27,6 +27,7 @@ export function bogotaDay(date: string | undefined, now = new Date()): string {
 }
 
 export interface MailInput {
+  from?: string;
   subject?: string;
   body?: string;
   date?: string;
@@ -67,9 +68,20 @@ export interface Movement {
   amountMinor: number;
   /** money received from the user's own name (a move between own accounts, not income) */
   self?: boolean;
-  /** destination bank of an outgoing transfer, e.g. "Nequi" */
+  /** the e-mail names who sent the money */
+  named?: boolean;
+  /** institution that sent the e-mail (where the money moved), e.g. "NEQUI" */
+  wallet?: string;
+  /** bank the money came from / went to, and the last digits of the destination account */
+  fromBank?: string;
   toBank?: string;
+  toAccount?: string;
 }
+
+// ponytail: sender → institution for the wallets seen so far; add a row when a new bank's mails need ownership rules.
+const WALLETS: [string, RegExp][] = [["NEQUI", /nequi/i], ["RAPPIPAY", /rappipay/i], ["DAVIPLATA", /daviplata/i], ["BANCOLOMBIA", /bancolombia/i],
+  ["BBVA", /bbva/i], ["DAVIVIENDA", /davivienda/i], ["NU", /nu\.com\.co/i], ["LULO", /lulo/i], ["FALABELLA", /falabella/i]];
+const bankKey = (s: string) => norm(s).replace(/\s+/g, "");
 
 const AMT = String.raw`\$?\s?(\d[\d.,]*)`;
 const title = (s: string) => s.toLowerCase().replace(/(^|\s)\p{L}/gu, (c) => c.toUpperCase());
@@ -84,6 +96,7 @@ export function parseMovement(mail: MailInput, now = new Date()): Movement | nul
   const d = mail.date ? new Date(mail.date) : now;
   const at = isNaN(d.getTime()) ? now.getTime() : d.getTime();
   const date = bogotaDay(mail.date, now);
+  const wallet = WALLETS.find(([, re]) => re.test(mail.from ?? ""))?.[0];
   const amount = (raw: string) => {
     try {
       return parseCop(raw);
@@ -93,44 +106,67 @@ export function parseMovement(mail: MailInput, now = new Date()): Movement | nul
   };
   const mk = (direction: Movement["direction"], raw: string, description: string, extra: Partial<Movement> = {}): Movement | null => {
     const amountMinor = amount(raw);
-    return amountMinor ? { direction, date, at, description: description.slice(0, 200), amountMinor, ...extra } : null;
+    return amountMinor ? { direction, date, at, description: description.slice(0, 200), amountMinor, wallet, ...extra } : null;
   };
 
   // Nequi: "Recibiste 42.000 de SANTIAGO PRIETO el 15 de noviembre ..." (greeting "¡Hola, SANTIAGO PRIETO!" = the user)
   let m = new RegExp(`Recibiste ${AMT} de (.+?) el `, "i").exec(flat);
   if (m) {
     const me = /Hola,? ([^!¡]+)!/i.exec(flat)?.[1];
-    return mk("in", m[1], `Recibiste de ${title(m[2])}`, { self: Boolean(me && norm(me) === norm(m[2])) });
+    const from = /desde el banco (\p{L}+)/iu.exec(flat)?.[1];
+    return mk("in", m[1], `Recibiste de ${title(m[2])}`, { self: Boolean(me && norm(me) === norm(m[2])), named: true, fromBank: from ? bankKey(from) : undefined });
   }
   // RappiPay: "Monto recibido $34.000 Banco Nequi"
   if ((m = new RegExp(`Monto recibido ${AMT}`, "i").exec(flat))) {
     const bank = /Monto recibido \S+ Banco (\p{L}+)/iu.exec(flat)?.[1];
-    return mk("in", m[1], bank ? `Recibiste desde ${title(bank)}` : "Dinero recibido");
+    return mk("in", m[1], bank ? `Recibiste desde ${title(bank)}` : "Dinero recibido", { fromBank: bank ? bankKey(bank) : undefined });
   }
   // RappiPay: "Monto transferido $42.000,00 ... Cuenta destino ****6342 Banco Nequi S.A."
   if ((m = new RegExp(`Monto transferido ${AMT}`, "i").exec(flat))) {
     const bank = /Cuenta destino \S+ Banco (\p{L}+)/iu.exec(flat)?.[1];
-    return mk("out", m[1], bank ? `Transferencia a ${title(bank)}` : "Transferencia enviada", { toBank: bank ? norm(bank) : undefined });
+    const acct = /Cuenta destino \*+(\d{3,6})/i.exec(flat)?.[1];
+    return mk("out", m[1], bank ? `Transferencia a ${title(bank)}` : "Transferencia enviada", { toBank: bank ? bankKey(bank) : undefined, toAccount: acct });
   }
   // Nequi credit installment: "Pagaste en total $41.547,41"
   if ((m = new RegExp(`Pagaste en total ${AMT}`, "i").exec(flat))) {
     return mk("out", m[1], /Cr[eé]dito Nequi/i.test(flat) ? "Cuota Crédito Nequi" : "Pago de cuota");
   }
   const p = parseBankMail(mail, now);
-  return p ? { direction: "out", at, ...p } : null;
+  return p ? { direction: "out", at, wallet, ...p } : null;
+}
+
+/** Banks the user owns an account at, and known own accounts as "BANK:last digits". */
+export interface Owned {
+  banks: string[];
+  accounts: string[];
 }
 
 /**
- * Drops moves between the user's own accounts: money received from their own name, and the outgoing transfer it
- * pairs with (same amount within 15 min, e.g. RappiPay → own Nequi). Counting them would double expenses/income.
- * ponytail: pairing only sees one sync batch; a pair split across two 15-min polls keeps the outgoing side.
+ * Learns the user's own accounts from the mails: money received from their own name means both the receiving wallet
+ * and the sending bank are theirs; the outgoing transfer it pairs with (same amount within 15 min) gives the account digits.
  */
-export function dropSelfTransfers<T extends Movement>(rows: T[]): T[] {
-  const selfIn = rows.filter((r) => r.direction === "in" && r.self);
-  const paired = new Set<T>();
-  for (const s of selfIn) {
-    const out = rows.find((r) => r.direction === "out" && r.toBank && !paired.has(r) && r.amountMinor === s.amountMinor && Math.abs(r.at - s.at) <= 15 * 60_000);
-    if (out) paired.add(out);
+export function learnOwned(rows: Movement[], prev: Owned): Owned {
+  const banks = new Set(prev.banks);
+  const accounts = new Set(prev.accounts);
+  for (const s of rows.filter((r) => r.direction === "in" && r.self)) {
+    if (s.wallet) banks.add(s.wallet);
+    if (s.fromBank) banks.add(s.fromBank);
+    const out = rows.find((r) => r.direction === "out" && r.toBank && r.amountMinor === s.amountMinor && Math.abs(r.at - s.at) <= 15 * 60_000);
+    if (out?.toBank) banks.add(out.toBank), out.toAccount && accounts.add(`${out.toBank}:${out.toAccount}`);
   }
-  return rows.filter((r) => !(r.direction === "in" && r.self) && !paired.has(r));
+  return { banks: [...banks].sort(), accounts: [...accounts].sort() };
+}
+
+/**
+ * A move between the user's own accounts (neither spending nor income):
+ * - money received from their own name, or from one of their banks when the mail names no sender;
+ * - money sent to one of their banks; when their account digits at that bank are known, only to that account,
+ *   so a transfer to a friend at the same bank still counts as spending.
+ * ponytail: unnamed money from an own bank is assumed to be the user's; a friend sending from that bank is missed.
+ */
+export function isOwnMove(r: Movement, owned: Owned): boolean {
+  if (r.direction === "in") return Boolean(r.self || (!r.named && r.fromBank && owned.banks.includes(r.fromBank)));
+  if (!r.toBank || !owned.banks.includes(r.toBank)) return false;
+  const known = owned.accounts.filter((a) => a.startsWith(`${r.toBank}:`));
+  return !known.length || !r.toAccount || known.includes(`${r.toBank}:${r.toAccount}`);
 }
