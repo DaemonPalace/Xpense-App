@@ -19,7 +19,8 @@ Prerequisites: Node.js 22+, AWS CLI credentials, `npx cdk bootstrap` once per ac
 
 ```bash
 npm ci
-npm test
+npm test                                        # unit: backend + mobile helpers, no Docker
+npm run test:integration                        # real handlers on DynamoDB Local (needs Docker)
 npm run typecheck
 npm run diff                                    # compare with deployed stack
 npm run deploy -- -c alertEmail=<operator email>   # required

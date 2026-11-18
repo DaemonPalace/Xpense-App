@@ -43,7 +43,8 @@ or removed**, so don't add more casually.
 ## Run it
 
 ```bash
-cd xpense-app && npm ci && npm test            # backend: 82 tests
+cd xpense-app && npm ci && npm test            # unit: 123 backend + 6 mobile
+npm run test:integration                       # 15 end-to-end tests on DynamoDB Local (Docker)
 cd mobile && npm install && npx expo start     # scan the QR with Expo Go
 npx tsc --noEmit && npx expo lint              # must stay clean
 ```

@@ -15,3 +15,4 @@ ios/
 android/
 .google-oauth.json
 .token-key
+.claude/worktrees/
