@@ -20,7 +20,7 @@ const ALERT = { id: "g1", payload: { headers: [{ name: "Subject", value: "Alerta
   { mimeType: "text/plain", body: { data: b64("Bancolombia le informa Compra por $25.000,00 en RAPPI COLOMBIA 12:30.") } },
   { mimeType: "application/pdf", filename: "x.pdf", body: { attachmentId: "a" } },
 ] } };
-const CREDIT = { id: "g2", payload: { headers: [{ name: "Subject", value: "Recibiste" }], mimeType: "text/html", body: { data: b64("<p>Recibiste $50.000 de JUAN</p>") } } };
+const CREDIT = { id: "g2", payload: { headers: [{ name: "Subject", value: "Recibiste" }], mimeType: "text/html", body: { data: b64("<p>¡Hola, SANTIAGO!</p><p>Recibiste 50.000 de JUAN PEREZ el 14 de noviembre de 2026</p>") } } };
 
 /** Fake Google: token endpoint, profile, search and message fetch. */
 function fakeGoogle(opts: { invalidGrant?: boolean; flaky?: boolean } = {}) {
@@ -68,7 +68,7 @@ describe("gmail helpers", () => {
   });
   it("extracts text from multipart and html-only messages", () => {
     expect(toMail(ALERT).body).toContain("Compra por $25.000,00");
-    expect(toMail(CREDIT).body).toContain("Recibiste $50.000");
+    expect(toMail(CREDIT).body).toContain("Recibiste 50.000");
   });
   it("searches bank senders after a unix time", () => {
     expect(searchQuery(new Date(1_700_000_000_000))).toMatch(/^from:\(bancolombia OR .*\) after:1700000000$/);
@@ -113,11 +113,13 @@ describe("gmail sync in ingest-worker", () => {
     items["USER#U|GMAIL"] = { token: encrypt("rt"), accountId: "A" };
   });
 
-  it("imports debit alerts only, as e-mail expenses", async () => {
+  it("imports money out as expenses and money in as one-off incomes", async () => {
     fakeGoogle();
     expect(await ingest(sqs)).toEqual({ batchItemFailures: [] });
     const txns = written().filter((i) => String(i.SK).startsWith("TXN#"));
     expect(txns).toEqual([expect.objectContaining({ amountMinor: 2_500_000, category: "food", origin: "email", accountId: "A", date: "2026-11-15" })]);
+    const incomes = written().filter((i) => String(i.SK).startsWith("INCOME#"));
+    expect(incomes).toEqual([expect.objectContaining({ name: "Recibiste de Juan Perez", amountMinor: 5_000_000, kind: "other", month: expect.stringMatching(/^\d{4}-\d{2}$/), accountId: "A" })]);
   });
 
   it("retries a transient Google 503", async () => {

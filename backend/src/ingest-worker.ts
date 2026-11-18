@@ -1,9 +1,9 @@
 import type { SQSBatchResponse, SQSEvent, SQSRecord } from "aws-lambda";
-import { GetCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { acctSk, activePk, batchWriteAll, ddb, delReq, GMAIL_USERS, gmailSk, jobItem, jobSk, profileSk, putReq, queryAll, rawSk, TABLE, userPk, type Item } from "./lib/db";
 import { accessToken, BACKFILL_DAYS, decrypt, fetchMails, GmailAuthError, listMessageIds, revoke } from "./lib/gmail";
-import { parseBankMail } from "./lib/mail";
+import { dropSelfTransfers, parseMovement } from "./lib/mail";
 import { errorFields, log } from "./lib/log";
 import { generate, firstSyncStart, type AccountType } from "./lib/simulator";
 import { parseImport } from "./lib/csv";
@@ -74,6 +74,7 @@ async function ingest(msg: Msg, job: Item, account: Item) {
   let raw: unknown[];
   let candidates: { input: TransactionInput; fingerprint: string }[];
   let rejections: { row: number; reason: string }[] = [];
+  let incomes: Item[] = [];
 
   if (msg.kind === "sync" && account.source === "gmail") {
     const g = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: gmailSk() } }))).Item;
@@ -88,13 +89,19 @@ async function ingest(msg: Msg, job: Item, account: Item) {
       if (e instanceof GmailAuthError) throw new UserFacingError(e.message);
       throw e;
     }
-    // Only amounts and merchants are kept as raw rows, never full e-mail bodies.
-    const rows = mails.flatMap((m) => {
-      const p = parseBankMail(m);
+    // Only amounts and descriptions are kept as raw rows, never full e-mail bodies.
+    const parsed = mails.flatMap((m) => {
+      const p = parseMovement(m);
       return p ? [{ messageId: m.id, ...p }] : [];
     });
-    raw = rows;
-    candidates = rows.map((r) => {
+    raw = parsed;
+    const rows = dropSelfTransfers(parsed);
+    // Money received becomes a one-off income for that month (the app's income model), id = message fingerprint.
+    incomes = rows.filter((r) => r.direction === "in").map((r) => {
+      const id = syncFingerprint(account.accountId, r.messageId);
+      return { PK, SK: `INCOME#${id}`, id, name: r.description, kind: "other", amountMinor: r.amountMinor, dayOfMonth: Number(r.date.slice(8)), month: r.date.slice(0, 7), accountId: account.accountId, origin: "email", createdAt: now(), updatedAt: now() };
+    });
+    candidates = rows.filter((r) => r.direction === "out").map((r) => {
       const category = categorize(r.description);
       return {
         fingerprint: syncFingerprint(account.accountId, r.messageId),
@@ -151,12 +158,23 @@ async function ingest(msg: Msg, job: Item, account: Item) {
     }
     await batchWriteAll(toWrite.map(putReq));
   }
+  let incomesAdded = 0;
+  for (const inc of incomes) {
+    // Never overwrite: the user may have edited the income.
+    try {
+      await ddb.send(new PutCommand({ TableName: TABLE, Item: inc, ConditionExpression: "attribute_not_exists(SK)" }));
+      incomesAdded++;
+    } catch (e: any) {
+      if (e?.name !== "ConditionalCheckFailedException") throw e;
+      skipped++;
+    }
+  }
 
   const finishedAt = now();
   if (toWrite.length) await update(PK, profileSk(), { lastTxnChangeAt: finishedAt, hasTransactions: true });
-  await update(PK, job.SK, { status: "succeeded", imported: toWrite.length, skipped, rejected: rejections.length, rejections: rejections.slice(0, 50), finishedAt });
+  await update(PK, job.SK, { status: "succeeded", imported: toWrite.length + incomesAdded, skipped, rejected: rejections.length, rejections: rejections.slice(0, 50), finishedAt });
   await update(PK, account.SK, { status: "synced", lastSyncedAt: finishedAt, failureReason: null });
-  log("info", "ingest succeeded", { correlationId: msg.correlationId, jobId: job.jobId, imported: toWrite.length, skipped, rejected: rejections.length });
+  log("info", "ingest succeeded", { correlationId: msg.correlationId, jobId: job.jobId, imported: toWrite.length, incomes: incomesAdded, skipped, rejected: rejections.length });
 }
 
 async function deleteKeys(items: Item[]) {
@@ -183,10 +201,11 @@ async function deleteUser(msg: Msg) {
 async function deleteAccountData(msg: Msg) {
   const PK = userPk(msg.userId);
   const txns = await queryAll(PK, "TXN#", { ProjectionExpression: "PK, SK, accountId" });
+  const incomes = await queryAll(PK, "INCOME#", { ProjectionExpression: "PK, SK, accountId" });
   const jobs = await queryAll(PK, "JOB#", { ProjectionExpression: "PK, SK, jobId, accountId" });
   const mine = jobs.filter((j) => j.accountId === msg.accountId);
   const raws = (await Promise.all(mine.map((j) => queryAll(PK, `RAW#${j.jobId}#`, { ProjectionExpression: "PK, SK" })))).flat();
-  await deleteKeys([...txns.filter((t) => t.accountId === msg.accountId), ...raws, ...mine]);
+  await deleteKeys([...[...txns, ...incomes].filter((t) => t.accountId === msg.accountId), ...raws, ...mine]);
   log("info", "account data deleted", { correlationId: msg.correlationId, accountId: msg.accountId });
 }
 
