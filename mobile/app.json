@@ -46,6 +46,17 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "1894887e-b5ec-4d8c-be0b-a76632aab151"
+      }
+    },
+    "owner": "daemonpalace"
   }
 }
