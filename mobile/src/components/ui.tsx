@@ -4,7 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text as RNText, TextInput, View,
+  ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, Pressable, RefreshControl, ScrollView, Text as RNText, TextInput, View,
   type TextInputProps, type TextProps, type ViewStyle,
 } from 'react-native';
 import Animated, { SlideInDown } from 'react-native-reanimated';
@@ -58,11 +58,15 @@ export function Text({ className = '', style, ...props }: TextProps & { classNam
 /* ---------- Layout ---------- */
 
 export function Screen({ title, subtitle, fab, children }: { title: string; subtitle?: string; fab?: boolean; children: React.ReactNode }) {
-  const { openSheet } = useAppData();
+  const { openSheet, refresh } = useAppData();
+  // Pull to refresh reloads the shared data; screens with their own lists (Movimientos) reload when it changes.
+  const [refreshing, setRefreshing] = useState(false);
+  const pull = () => { setRefreshing(true); refresh().finally(() => setRefreshing(false)); };
   return <SafeAreaView className="flex-1 bg-canvas" edges={['top']}>
     {/* Android is edge-to-edge (the window no longer resizes), so behavior must be set on both platforms. */}
     <KeyboardAvoidingView behavior="padding" className="flex-1">
-    <ScrollView className="flex-1" contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: fab ? 104 : 32 }} keyboardShouldPersistTaps="handled">
+    <ScrollView className="flex-1" contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: fab ? 104 : 32 }} keyboardShouldPersistTaps="handled"
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={pull} tintColor={colors.brand} colors={[colors.brand]} />}>
       <View className="mb-6 flex-row items-start justify-between gap-3">
         <View className="flex-1">
           <Text accessibilityRole="header" className="font-heavy text-[30px] leading-[36px] text-ink">{title}</Text>
