@@ -1,11 +1,13 @@
 import * as DocumentPicker from 'expo-document-picker';
+import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Alert, View } from 'react-native';
 
-import { Button, Callout, Card, CardHeading, Chip, FormError, IconTile, Page, SmallLink, Text } from '@/components/ui';
+import { Button, Callout, Card, CardHeading, Chip, Choice, FormError, IconTile, Page, SmallLink, Text } from '@/components/ui';
 import { useAppData } from '@/data-context';
-import { api, waitForJob, type Account, type Job } from '@/lib/api';
+import { api, ApiError, waitForJob, type Account, type Job } from '@/lib/api';
 import { t } from '@/strings';
 
 export default function Cuentas() {
@@ -52,6 +54,24 @@ export default function Cuentas() {
     return r.job?.jobId ?? null;
   });
 
+  /** Google sign-in in the system browser; the backend keeps the token and redirects back with the backfill job. */
+  const connectGmail = () => withJob(async () => {
+    const returnTo = Linking.createURL('cuentas');
+    let url: string;
+    try {
+      ({ url } = await api<{ url: string }>('POST', '/api/gmail/connect', { returnTo }));
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 503) return setError(t.accounts.gmailUnavailable), null;
+      throw e;
+    }
+    const res = await WebBrowser.openAuthSessionAsync(url, returnTo);
+    if (res.type !== 'success') return setError(t.accounts.gmailCancelled), null;
+    const { gmail, jobId } = Linking.parse(res.url).queryParams ?? {};
+    if (gmail === 'cancelled') return setError(t.accounts.gmailCancelled), null;
+    if (gmail !== 'ok') throw new Error('gmail connect failed');
+    return typeof jobId === 'string' ? jobId : null;
+  });
+
   const importCsv = async () => {
     const pick = await DocumentPicker.getDocumentAsync({ type: ['text/csv', 'text/comma-separated-values', 'text/plain', 'application/vnd.ms-excel'], copyToCacheDirectory: true });
     if (pick.canceled) return;
@@ -70,6 +90,12 @@ export default function Cuentas() {
     });
   };
 
+  const toggleOwnBank = (a: Account, bank: string) => withJob(async () => {
+    const own = new Set(a.ownBanks ?? []);
+    if (own.has(bank)) own.delete(bank); else own.add(bank);
+    return (await api<Job>('PATCH', `/api/accounts/${a.accountId}`, { ownBanks: [...own] })).jobId;
+  });
+
   const sync = (a: Account) => withJob(async () => (await api<Job>('POST', `/api/accounts/${a.accountId}/sync`)).jobId);
   const unlink = (a: Account) => Alert.alert(t.accounts.unlinkTitle, a.name, [
     { text: t.common.cancel, style: 'cancel' },
@@ -81,7 +107,7 @@ export default function Cuentas() {
     <Text className="mb-5 text-sm leading-5 text-muted">{t.accounts.intro}</Text>
     {accounts.map(a => <Card key={a.accountId} className="mb-3">
       <View className="flex-row items-center gap-3">
-        <IconTile icon={a.source === 'csv' ? 'document-text-outline' : a.type === 'credit_card' ? 'card-outline' : 'business-outline'} background="#DDF3EF" color="#0F766E" />
+        <IconTile icon={a.source === 'csv' ? 'document-text-outline' : a.source === 'gmail' ? 'mail-outline' : a.type === 'credit_card' ? 'card-outline' : 'business-outline'} background="#DDF3EF" color="#0F766E" />
         <View className="flex-1">
           <Text className="font-strong text-[15px] text-ink">{a.name}</Text>
           {a.lastSyncedAt ? <Text className="text-xs text-muted">{t.accounts.lastSync(new Date(a.lastSyncedAt).toLocaleString('es-CO'))}</Text> : null}
@@ -89,8 +115,16 @@ export default function Cuentas() {
         </View>
         <Chip label={t.accounts.status[a.status] ?? a.status} tone={a.status === 'failed' ? 'amber' : a.status === 'synced' ? 'green' : 'brand'} />
       </View>
+      {a.source === 'gmail' && (a.seenBanks?.length || a.ownBanks?.length) ? <View className="mt-3">
+        <Text className="font-strong text-sm text-ink">{t.accounts.ownBanks}</Text>
+        <Text className="mb-2 text-xs leading-5 text-muted">{t.accounts.ownBanksHint}</Text>
+        <View className="flex-row flex-wrap gap-2">
+          {[...new Set([...(a.ownBanks ?? []), ...(a.seenBanks ?? [])])].sort().map(b =>
+            <Choice key={b} label={t.accounts.bankName(b)} selected={a.ownBanks?.includes(b) ?? false} onPress={() => !busy && a.status !== 'syncing' && toggleOwnBank(a, b)} />)}
+        </View>
+      </View> : null}
       <View className="mt-2 flex-row justify-between gap-4">
-        {a.source === 'simulated' && !busy && a.status !== 'syncing' ? <SmallLink button label={t.accounts.sync} onPress={() => sync(a)} /> : <View />}
+        {busy || a.status === 'syncing' ? <View /> : a.source === 'gmail' && a.status === 'failed' ? <SmallLink button label={t.accounts.gmailReconnect} onPress={connectGmail} /> : a.source !== 'csv' ? <SmallLink button label={t.accounts.sync} onPress={() => sync(a)} /> : <View />}
         {!busy ? <SmallLink button danger label={t.accounts.unlink} onPress={() => unlink(a)} /> : null}
       </View>
     </Card>)}
@@ -103,6 +137,10 @@ export default function Cuentas() {
       <Button label={t.accounts.connectChecking} icon="business-outline" onPress={() => connect('checking')} busy={busy} className="mb-3 w-full" />
       <Button label={t.accounts.connectCard} icon="card-outline" variant="secondary" onPress={() => connect('credit_card')} disabled={busy} className="w-full" />
     </Card>
+    {!accounts.some(a => a.source === 'gmail') ? <Card className="mb-5">
+      <CardHeading title={t.accounts.gmailTitle} subtitle={t.accounts.gmailHint} />
+      <Button label={t.accounts.gmailConnect} icon="mail-outline" onPress={connectGmail} disabled={busy} className="w-full" />
+    </Card> : null}
     <Card>
       <CardHeading title={t.accounts.importCsv} subtitle={t.accounts.csvHint} />
       <Button label="Elegir archivo" icon="document-attach-outline" variant="secondary" onPress={importCsv} disabled={busy} className="w-full" />

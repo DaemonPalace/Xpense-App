@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +32,16 @@ function originSecret(scope: Construct): string {
   const file = join(ROOT, ".origin-secret");
   if (!existsSync(file)) writeFileSync(file, randomUUID(), { mode: 0o600 });
   return readFileSync(file, "utf8").trim();
+}
+
+/** Gmail connection settings. Absent file = feature off (the app shows it as unavailable). Setup: HANDOFF.md. */
+function gmailEnv(): Record<string, string> {
+  const file = join(ROOT, ".google-oauth.json");
+  if (!existsSync(file)) return {};
+  const { clientId, clientSecret, redirectUri } = JSON.parse(readFileSync(file, "utf8"));
+  const keyFile = join(ROOT, ".token-key"); // AES key for stored Gmail refresh tokens; losing it means users reconnect
+  if (!existsSync(keyFile)) writeFileSync(keyFile, randomBytes(32).toString("base64"), { mode: 0o600 });
+  return { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, GOOGLE_REDIRECT_URI: redirectUri, TOKEN_KEY: readFileSync(keyFile, "utf8").trim() };
 }
 
 export class FinanceStack extends Stack {
@@ -141,12 +151,14 @@ export class FinanceStack extends Stack {
       });
 
     const secret = originSecret(this);
+    const gmail = gmailEnv();
     const api = fn("Api", "api.ts", Duration.seconds(10), {
       USER_POOL_ID: userPool.userPoolId,
       CLIENT_ID: `${userPoolClient.userPoolClientId},${mobileClient.userPoolClientId}`,
       ORIGIN_SECRET: secret,
       INGEST_QUEUE_URL: ingestQueue.queueUrl,
       UPLOAD_BUCKET: uploadBucket.bucketName,
+      ...gmail,
     });
     table.grantReadWriteData(api);
     ingestQueue.grantSendMessages(api); // deleteUser / deleteAccountData only
@@ -175,6 +187,7 @@ export class FinanceStack extends Stack {
     const ingestWorker = fn("IngestWorker", "ingest-worker.ts", Duration.minutes(5), {
       UPLOAD_BUCKET: uploadBucket.bucketName,
       DDB_MAX_ATTEMPTS: "10",
+      ...gmail,
       ...(allowPoison ? { ALLOW_POISON: "true" } : {}),
     });
     table.grantReadWriteData(ingestWorker);
@@ -200,6 +213,14 @@ export class FinanceStack extends Stack {
       flexibleTimeWindow: { mode: "OFF" },
       target: { arn: forecastWorker.functionArn, roleArn: schedulerRole.roleArn, input: JSON.stringify({ mode: "daily" }) },
     });
+    if (gmail.TOKEN_KEY) {
+      ingestWorker.grantInvoke(schedulerRole);
+      new scheduler.CfnSchedule(this, "GmailPoll", {
+        scheduleExpression: "rate(15 minutes)",
+        flexibleTimeWindow: { mode: "OFF" },
+        target: { arn: ingestWorker.functionArn, roleArn: schedulerRole.roleArn, input: JSON.stringify({ mode: "gmailPoll" }) },
+      });
+    }
 
     // ---------- CDN ----------
     // The site is one static page (privacy policy and terms, I6): every path without a file extension serves it.

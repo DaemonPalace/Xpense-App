@@ -4,9 +4,11 @@ import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { S3Client } from "@aws-sdk/client-s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { AdminDeleteUserCommand, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
+import { randomBytes } from "node:crypto";
 import { ulid } from "ulid";
 import { HttpError, requireOrigin, requireUser } from "./lib/auth";
-import { acctSk, activePk, aggSk, ddb, forecastSk, jobSk, profileSk, queryAll, TABLE, txnSk, userPk, type Item } from "./lib/db";
+import { acctSk, activePk, aggSk, ddb, forecastSk, GMAIL_USERS, gmailSk, jobItem, jobSk, profileSk, queryAll, TABLE, txnSk, userPk, type Item } from "./lib/db";
+import { authUrl, configured as gmailConfigured, decrypt, encrypt, exchangeCode, profileEmail, revoke } from "./lib/gmail";
 import { errorFields, log, withCorrelation } from "./lib/log";
 import { MAX_ABS_MINOR } from "./lib/money";
 import { antExpenses, DEFAULT_ANT_THRESHOLD_MINOR } from "./lib/ant";
@@ -151,25 +153,7 @@ function crud(path: string, prefix: string, input: (body: any) => Record<string,
 const accountDto = ({ PK, SK, lastCorrelationId, ...a }: Item) => a;
 const jobDto = ({ PK, SK, lastCorrelationId, ...j }: Item) => j;
 
-function newJob(ctx: Ctx, accountId: string, kind: "sync" | "csv", status: "queued" | "awaiting_upload"): Item {
-  const jobId = ulid();
-  return {
-    PK: pk(ctx),
-    SK: jobSk(jobId),
-    jobId,
-    accountId,
-    kind,
-    status,
-    imported: 0,
-    skipped: 0,
-    rejected: 0,
-    rejections: [],
-    uploadKey: kind === "csv" ? `uploads/${ctx.user.sub}/${jobId}.csv` : null,
-    correlationId: ctx.correlationId,
-    lastCorrelationId: ctx.correlationId,
-    createdAt: now(),
-  };
-}
+const newJob = (ctx: Ctx, accountId: string, kind: "sync" | "csv", status: "queued" | "awaiting_upload") => jobItem(ctx.user.sub, accountId, kind, status, ctx.correlationId);
 
 async function sendIngest(message: Record<string, unknown>) {
   await sqs.send(new SendMessageCommand({ QueueUrl: process.env.INGEST_QUEUE_URL, MessageBody: JSON.stringify(message) }));
@@ -336,7 +320,7 @@ const routes: [string, string, Handler][] = [
   ["POST", "/api/accounts/:accountId/sync", async (ctx) => {
     const account = await getItem(pk(ctx), acctSk(ctx.params.accountId));
     if (!account) throw notFound();
-    if (account.source !== "simulated") throw badRequest("Only simulated accounts can be synced; use CSV import");
+    if (account.source !== "simulated" && account.source !== "gmail") throw badRequest("Only bank and Gmail accounts can be synced; use CSV import");
     const job = newJob(ctx, account.accountId, "sync", "queued");
     try {
       await ddb.send(
@@ -362,6 +346,45 @@ const routes: [string, string, Handler][] = [
     }
     return { status: 202, body: jobDto(job) };
   }],
+  ["PATCH", "/api/accounts/:accountId", async (ctx) => {
+    // Gmail accounts only: banks where the user has their own account. Moves between them are not spending or income.
+    const banks = ctx.body?.ownBanks;
+    if (!Array.isArray(banks) || banks.length > 30 || !banks.every((b) => typeof b === "string" && /^[A-Z0-9]{1,30}$/.test(b)))
+      throw badRequest("ownBanks must be up to 30 uppercase bank keys");
+    const account = await getItem(pk(ctx), acctSk(ctx.params.accountId));
+    if (!account || account.source !== "gmail") throw notFound();
+    const ownBanks = [...new Set(banks as string[])].sort();
+    // Re-import the backfill window with the new rules (worker deletes this account's mail-derived items first).
+    const job = { ...newJob(ctx, account.accountId, "sync", "queued"), rebuild: true };
+    try {
+      await ddb.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: TABLE,
+                Key: { PK: pk(ctx), SK: account.SK },
+                UpdateExpression: "SET ownBanks = :b, ownAccounts = :a, lastSyncedAt = :null, #s = :syncing, failureReason = :null",
+                ConditionExpression: "attribute_exists(SK) AND #s <> :syncing",
+                ExpressionAttributeNames: { "#s": "status" },
+                ExpressionAttributeValues: {
+                  ":b": ownBanks,
+                  ":a": (account.ownAccounts ?? []).filter((a: string) => ownBanks.includes(a.split(":")[0])),
+                  ":null": null,
+                  ":syncing": "syncing",
+                },
+              },
+            },
+            { Put: { TableName: TABLE, Item: job } },
+          ],
+        }),
+      );
+    } catch (e) {
+      if (isConditionFail(e)) throw new HttpError(409, "already_syncing", "This account is already syncing");
+      throw e;
+    }
+    return { status: 202, body: jobDto(job) };
+  }],
   ["DELETE", "/api/accounts/:accountId", async (ctx) => {
     const account = await getItem(pk(ctx), acctSk(ctx.params.accountId));
     if (!account) throw notFound();
@@ -369,8 +392,21 @@ const routes: [string, string, Handler][] = [
     if (deleteTransactions !== "true" && deleteTransactions !== "false") throw badRequest("deleteTransactions must be true or false");
     // Queue the bulk delete before removing the account so a crash can't orphan the request.
     if (deleteTransactions === "true") await sendIngest({ kind: "deleteAccountData", userId: ctx.user.sub, accountId: account.accountId, correlationId: ctx.correlationId });
+    if (account.source === "gmail") await disconnectGmail(ctx.user.sub);
     await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: pk(ctx), SK: account.SK } }));
     return { status: 204 };
+  }],
+
+  // ---- Gmail (bank alert e-mails) ----
+  ["POST", "/api/gmail/connect", async (ctx) => {
+    if (!gmailConfigured()) throw new HttpError(503, "gmail_unavailable", "Gmail connection is not configured");
+    const returnTo = ctx.body?.returnTo;
+    // Only app links: the callback redirects the browser here, so never to an arbitrary website.
+    if (typeof returnTo !== "string" || !/^(exp|exps|xpense):\/\/\S{1,300}$/.test(returnTo)) throw badRequest("returnTo must be an app link");
+    await touchProfile(ctx);
+    const state = randomBytes(24).toString("base64url");
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: { PK: `OAUTH#${state}`, SK: "OAUTH", userId: ctx.user.sub, returnTo, expiresAt: Math.floor(Date.now() / 1000) + 600 } }));
+    return { status: 200, body: { url: authUrl(state) } };
   }],
 
   // ---- imports & jobs ----
@@ -560,6 +596,57 @@ function respond(status: number, body: unknown, correlationId: string): APIGatew
   };
 }
 
+/** Revokes Google access and removes the stored token + poller marker. */
+async function disconnectGmail(userId: string) {
+  const g = await getItem(userPk(userId), gmailSk());
+  if (g?.token) await revoke(decrypt(g.token));
+  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: userPk(userId), SK: gmailSk() } }));
+  await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: GMAIL_USERS, SK: userPk(userId) } }));
+}
+
+/** GET /api/gmail/callback — Google redirects the browser here; we store the token, queue the backfill, and bounce back to the app. */
+async function gmailCallback(event: APIGatewayProxyEventV2, correlationId: string): Promise<APIGatewayProxyStructuredResultV2> {
+  const q = event.queryStringParameters ?? {};
+  // One-time state: deleting it returns the request it belongs to (user + app link).
+  const st = q.state
+    ? (await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: `OAUTH#${q.state}`, SK: "OAUTH" }, ReturnValues: "ALL_OLD" }))).Attributes
+    : undefined;
+  if (!st || st.expiresAt < Date.now() / 1000) {
+    return { statusCode: 400, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }, body: "El enlace venció. Vuelve a Xpense e inténtalo de nuevo." };
+  }
+  const back = (params: Record<string, string>) => ({
+    statusCode: 302,
+    headers: { location: `${st.returnTo}${st.returnTo.includes("?") ? "&" : "?"}${new URLSearchParams(params)}`, "cache-control": "no-store" },
+  });
+  if (q.error || !q.code) return back({ gmail: "cancelled" });
+  try {
+    const { refreshToken, accessToken } = await exchangeCode(q.code);
+    const email = await profileEmail(accessToken);
+    const PK = userPk(st.userId);
+    const existing = await getItem(PK, gmailSk());
+    const account = existing && (await getItem(PK, acctSk(existing.accountId)));
+    const accountId = account?.accountId ?? ulid();
+    const job = jobItem(st.userId, accountId, "sync", "queued", correlationId);
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          account
+            ? { Update: { TableName: TABLE, Key: { PK, SK: account.SK }, UpdateExpression: "SET #s = :s, failureReason = :n, #n = :name", ExpressionAttributeNames: { "#s": "status", "#n": "name" }, ExpressionAttributeValues: { ":s": "syncing", ":n": null, ":name": email } } }
+            : { Put: { TableName: TABLE, Item: { PK, SK: acctSk(accountId), accountId, name: email, type: "checking", source: "gmail", status: "syncing", lastSyncedAt: null, failureReason: null, createdAt: now(), lastCorrelationId: correlationId } } },
+          { Put: { TableName: TABLE, Item: { PK, SK: gmailSk(), accountId, email, token: encrypt(refreshToken), connectedAt: now() } } },
+          { Put: { TableName: TABLE, Item: { PK: GMAIL_USERS, SK: PK, accountId } } },
+          { Put: { TableName: TABLE, Item: job } },
+        ],
+      }),
+    );
+    log("info", "gmail connected", { correlationId, userId: st.userId });
+    return back({ gmail: "ok", jobId: job.jobId });
+  } catch (err) {
+    log("error", "gmail connect failed", { correlationId, userId: st.userId, ...errorFields(err) });
+    return back({ gmail: "error" });
+  }
+}
+
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> {
   const headers = event.headers ?? {};
   const correlationId = withCorrelation(headers["x-correlation-id"]);
@@ -567,6 +654,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.rawPath;
   try {
     requireOrigin(headers);
+    if (method === "GET" && path === "/api/gmail/callback") return await gmailCallback(event, correlationId);
     const user = await requireUser(headers);
     for (const r of compiled) {
       const m = r.method === method && r.re.exec(path);

@@ -76,9 +76,9 @@ export const t = {
     remaining: (v: string, days: number) => `Te quedan ${v} para ${days} ${days === 1 ? 'día' : 'días'}`,
     used: (pct: number) => `Has usado el ${pct}% de lo que puedes gastar este mes`,
     goal: (saved: string, goal: string) => `Ahorro del mes: ${saved} de ${goal}`,
-    warning: 'Vas rápido: cuida tus gastos para cumplir tu meta.',
-    overToday: 'Hoy ya pasaste tu límite diario.',
-    over: (v: string) => `Tu meta de ahorro está en riesgo: te pasaste ${v}.`,
+    warning: 'Vas rápido: cuida tus gastos para cumplir tu meta',
+    overToday: 'Hoy ya pasaste tu límite diario',
+    over: (v: string) => `Tu meta de ahorro está en riesgo: te pasaste ${v}`,
     add: 'Registrar gasto',
     addIncome: 'Registrar ingreso',
     settings: 'Ajustes',
@@ -95,7 +95,7 @@ export const t = {
     vault: (v: string) => `En la caja fuerte: ${v}`,
     ant: 'Gastos hormiga',
     antSummary: (n: number, v: string) => `${n} compras pequeñas repetidas por ${v} este mes`,
-    antNone: 'Sin gastos hormiga este mes. ¡Bien!',
+    antNone: 'Sin gastos hormiga este mes',
     empty: 'Aún no hay gastos este mes.',
   },
   movements: {
@@ -129,6 +129,15 @@ export const t = {
     jobDone: (i: number, s: number, r: number) => `Listo: ${i} importados, ${s} duplicados omitidos, ${r} rechazados.`,
     jobFailed: () => 'No se pudo procesar. Inténtalo de nuevo.', // backend reasons are internal English text
     empty: 'Aún no tienes cuentas conectadas.',
+    gmailTitle: 'Conectar Gmail',
+    gmailHint: 'Leemos solo las alertas de compra que tu banco te envía por correo. Traemos el último mes y luego revisamos cada 15 minutos',
+    gmailConnect: 'Conectar con Google',
+    gmailReconnect: 'Reconectar Gmail',
+    gmailUnavailable: 'La conexión con Gmail aún no está habilitada',
+    gmailCancelled: 'Conexión cancelada',
+    ownBanks: 'Tus cuentas',
+    ownBanksHint: 'Lo que mueves entre estas cuentas no cuenta como gasto ni ingreso. Toca para marcar o desmarcar',
+    bankName: (key: string) => ({ RAPPIPAY: 'RappiPay', BBVA: 'BBVA', NU: 'Nu' } as Record<string, string>)[key] ?? key.charAt(0) + key.slice(1).toLowerCase(),
   },
   vault: {
     title: 'Caja fuerte',
@@ -175,11 +184,11 @@ export const t = {
     label: '¿Qué pasó?',
     placeholder: 'Ej. Registré un gasto y no apareció en Hoy.',
     send: 'Enviar reporte',
-    sent: 'Reporte enviado. ¡Gracias!',
+    sent: 'Reporte enviado, gracias',
   },
 } as const;
 
-export const CONSENT_VERSION = '2026-11';
+export const CONSENT_VERSION = '2026-11b'; // bumped for the Gmail data disclosure
 
 /** Institutions offered at sign-up (stored in Cognito custom:institution). Add more here. */
 export const INSTITUTIONS = ['Universidad de La Sabana'] as const;

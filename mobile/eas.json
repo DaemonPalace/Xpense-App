@@ -1,0 +1,19 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://d9cmymyzmumdv.cloudfront.net",
+        "EXPO_PUBLIC_COGNITO_USER_POOL_ID": "us-east-1_JmDSmYNhf",
+        "EXPO_PUBLIC_COGNITO_CLIENT_ID": "6t4jfcdk1n31ia9ntaik6guin8"
+      }
+    }
+  }
+}

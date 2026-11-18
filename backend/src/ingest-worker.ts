@@ -1,7 +1,9 @@
 import type { SQSBatchResponse, SQSEvent, SQSRecord } from "aws-lambda";
-import { GetCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { acctSk, activePk, batchWriteAll, ddb, delReq, jobSk, profileSk, putReq, queryAll, rawSk, TABLE, userPk, type Item } from "./lib/db";
+import { acctSk, activePk, batchWriteAll, ddb, delReq, GMAIL_USERS, gmailSk, jobItem, jobSk, profileSk, putReq, queryAll, rawSk, TABLE, userPk, type Item } from "./lib/db";
+import { accessToken, BACKFILL_DAYS, decrypt, fetchMails, GmailAuthError, listMessageIds, revoke } from "./lib/gmail";
+import { isOwnMove, learnOwned, parseMovement } from "./lib/mail";
 import { errorFields, log } from "./lib/log";
 import { generate, firstSyncStart, type AccountType } from "./lib/simulator";
 import { parseImport } from "./lib/csv";
@@ -72,8 +74,52 @@ async function ingest(msg: Msg, job: Item, account: Item) {
   let raw: unknown[];
   let candidates: { input: TransactionInput; fingerprint: string }[];
   let rejections: { row: number; reason: string }[] = [];
+  let incomes: Item[] = [];
+  let accountFields: Record<string, unknown> = {};
 
-  if (msg.kind === "sync") {
+  if (msg.kind === "sync" && account.source === "gmail") {
+    const g = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: gmailSk() } }))).Item;
+    if (!g) throw new UserFacingError("Gmail is not connected — reconnect Gmail");
+    // 1-day overlap with the last run; duplicates are skipped by message id.
+    const since = new Date(account.lastSyncedAt ? Date.parse(account.lastSyncedAt) - 86_400_000 : Date.now() - BACKFILL_DAYS * 86_400_000);
+    let mails;
+    try {
+      const access = await accessToken(decrypt(g.token));
+      mails = await fetchMails(access, await listMessageIds(access, since));
+    } catch (e) {
+      if (e instanceof GmailAuthError) throw new UserFacingError(e.message);
+      throw e;
+    }
+    // Only amounts and descriptions are kept as raw rows, never full e-mail bodies.
+    const parsed = mails.flatMap((m) => {
+      const p = parseMovement(m);
+      return p ? [{ messageId: m.id, ...p }] : [];
+    });
+    raw = parsed;
+    // Own-account moves are neither spending nor income; what we learn about the user's accounts is kept on the account.
+    const owned = learnOwned(parsed, { banks: account.ownBanks ?? [], accounts: account.ownAccounts ?? [] });
+    const seen = new Set<string>(account.seenBanks ?? []);
+    for (const r of parsed) [r.wallet, r.fromBank, r.toBank].forEach((b) => b && seen.add(b));
+    accountFields = { ownBanks: owned.banks, ownAccounts: owned.accounts, seenBanks: [...seen].sort() };
+    const rows = parsed.filter((r) => !isOwnMove(r, owned));
+    if (job.rebuild) {
+      // Ownership rules changed: re-import this account's mail-derived movements from scratch.
+      const old = [...(await queryAll(PK, "TXN#", { ProjectionExpression: "PK, SK, accountId" })), ...(await queryAll(PK, "INCOME#", { ProjectionExpression: "PK, SK, accountId" }))];
+      await deleteKeys(old.filter((i) => i.accountId === account.accountId));
+    }
+    // Money received becomes a one-off income for that month (the app's income model), id = message fingerprint.
+    incomes = rows.filter((r) => r.direction === "in").map((r) => {
+      const id = syncFingerprint(account.accountId, r.messageId);
+      return { PK, SK: `INCOME#${id}`, id, name: r.description, kind: "other", amountMinor: r.amountMinor, dayOfMonth: Number(r.date.slice(8)), month: r.date.slice(0, 7), accountId: account.accountId, origin: "email", createdAt: now(), updatedAt: now() };
+    });
+    candidates = rows.filter((r) => r.direction === "out").map((r) => {
+      const category = categorize(r.description);
+      return {
+        fingerprint: syncFingerprint(account.accountId, r.messageId),
+        input: { date: r.date, amountMinor: r.amountMinor, type: category === "savings" ? "savings" : "expense", category, description: r.description, accountId: account.accountId },
+      };
+    });
+  } else if (msg.kind === "sync") {
     const from = account.lastSyncedAt ? account.lastSyncedAt.slice(0, 10) : firstSyncStart(today());
     const rows = generate(account.accountId, account.type as AccountType, from, today());
     raw = rows;
@@ -117,18 +163,29 @@ async function ingest(msg: Msg, job: Item, account: Item) {
     const dates = candidates.map((c) => c.input.date).sort();
     const existing = await existingSks(PK, dates[0], dates[dates.length - 1]);
     for (const c of candidates) {
-      const item = toItem(msg.userId, c.input, msg.kind === "sync" ? "sync" : "csv", msg.correlationId, { txnId: c.fingerprint, fingerprint: c.fingerprint, jobId: job.jobId });
+      const item = toItem(msg.userId, c.input, msg.kind === "csv" ? "csv" : account.source === "gmail" ? "email" : "sync", msg.correlationId, { txnId: c.fingerprint, fingerprint: c.fingerprint, jobId: job.jobId });
       if (existing.has(item.SK)) skipped++;
       else existing.add(item.SK), toWrite.push(item);
     }
     await batchWriteAll(toWrite.map(putReq));
   }
+  let incomesAdded = 0;
+  for (const inc of incomes) {
+    // Never overwrite: the user may have edited the income.
+    try {
+      await ddb.send(new PutCommand({ TableName: TABLE, Item: inc, ConditionExpression: "attribute_not_exists(SK)" }));
+      incomesAdded++;
+    } catch (e: any) {
+      if (e?.name !== "ConditionalCheckFailedException") throw e;
+      skipped++;
+    }
+  }
 
   const finishedAt = now();
   if (toWrite.length) await update(PK, profileSk(), { lastTxnChangeAt: finishedAt, hasTransactions: true });
-  await update(PK, job.SK, { status: "succeeded", imported: toWrite.length, skipped, rejected: rejections.length, rejections: rejections.slice(0, 50), finishedAt });
-  await update(PK, account.SK, { status: "synced", lastSyncedAt: finishedAt, failureReason: null });
-  log("info", "ingest succeeded", { correlationId: msg.correlationId, jobId: job.jobId, imported: toWrite.length, skipped, rejected: rejections.length });
+  await update(PK, job.SK, { status: "succeeded", imported: toWrite.length + incomesAdded, skipped, rejected: rejections.length, rejections: rejections.slice(0, 50), finishedAt });
+  await update(PK, account.SK, { status: "synced", lastSyncedAt: finishedAt, failureReason: null, ...accountFields });
+  log("info", "ingest succeeded", { correlationId: msg.correlationId, jobId: job.jobId, imported: toWrite.length, incomes: incomesAdded, skipped, rejected: rejections.length });
 }
 
 async function deleteKeys(items: Item[]) {
@@ -137,6 +194,9 @@ async function deleteKeys(items: Item[]) {
 
 async function deleteUser(msg: Msg) {
   const PK = userPk(msg.userId);
+  const g = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK, SK: gmailSk() } }))).Item;
+  if (g?.token) await revoke(decrypt(g.token));
+  await deleteKeys([{ PK: GMAIL_USERS, SK: PK }]);
   // Profile first, so forecast-worker stops recomputing for this user while the rest is deleted.
   await deleteKeys([{ PK, SK: profileSk() }]);
   await deleteKeys(await queryAll(PK, "", { ProjectionExpression: "PK, SK" }));
@@ -152,10 +212,11 @@ async function deleteUser(msg: Msg) {
 async function deleteAccountData(msg: Msg) {
   const PK = userPk(msg.userId);
   const txns = await queryAll(PK, "TXN#", { ProjectionExpression: "PK, SK, accountId" });
+  const incomes = await queryAll(PK, "INCOME#", { ProjectionExpression: "PK, SK, accountId" });
   const jobs = await queryAll(PK, "JOB#", { ProjectionExpression: "PK, SK, jobId, accountId" });
   const mine = jobs.filter((j) => j.accountId === msg.accountId);
   const raws = (await Promise.all(mine.map((j) => queryAll(PK, `RAW#${j.jobId}#`, { ProjectionExpression: "PK, SK" })))).flat();
-  await deleteKeys([...txns.filter((t) => t.accountId === msg.accountId), ...raws, ...mine]);
+  await deleteKeys([...[...txns, ...incomes].filter((t) => t.accountId === msg.accountId), ...raws, ...mine]);
   log("info", "account data deleted", { correlationId: msg.correlationId, accountId: msg.accountId });
 }
 
@@ -188,7 +249,42 @@ async function processRecord(record: SQSRecord) {
   }
 }
 
-export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
+/** Every 15 min (EventBridge Scheduler): queue a sync job for each connected Gmail account that is idle. */
+async function pollGmail() {
+  const correlationId = `gmail-poll-${Date.now()}`;
+  let queued = 0;
+  for (const m of await queryAll(GMAIL_USERS, "")) {
+    const userId = String(m.SK).slice(5);
+    const job = jobItem(userId, m.accountId, "sync", "queued", correlationId);
+    try {
+      await ddb.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              // ponytail: failed accounts (e.g. expired Google access) stop polling until the user reconnects or taps Sincronizar
+              Update: {
+                TableName: TABLE,
+                Key: { PK: m.SK, SK: acctSk(m.accountId) },
+                UpdateExpression: "SET #s = :syncing",
+                ConditionExpression: "attribute_exists(SK) AND #s <> :syncing AND #s <> :failed",
+                ExpressionAttributeNames: { "#s": "status" },
+                ExpressionAttributeValues: { ":syncing": "syncing", ":failed": "failed" },
+              },
+            },
+            { Put: { TableName: TABLE, Item: job } },
+          ],
+        }),
+      );
+      queued++;
+    } catch (e: any) {
+      if (e?.name !== "TransactionCanceledException") throw e;
+    }
+  }
+  log("info", "gmail poll", { correlationId, queued });
+}
+
+export async function handler(event: SQSEvent | { mode: "gmailPoll" }): Promise<SQSBatchResponse> {
+  if ("mode" in event) return pollGmail().then(() => ({ batchItemFailures: [] }));
   const batchItemFailures: { itemIdentifier: string }[] = [];
   for (const record of event.Records) {
     try {

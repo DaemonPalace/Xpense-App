@@ -5,7 +5,7 @@ import { useCallback } from 'react';
 import { Button, colors, FormError, Loading, Page, type IconName } from '@/components/ui';
 import { useAppData } from '@/data-context';
 
-const icons = { hoy: 'home', gemelo: 'sparkles', comida: 'restaurant', movimientos: 'receipt' } as const;
+const icons = { hoy: 'home', gemelo: 'analytics', comida: 'restaurant', movimientos: 'receipt' } as const;
 
 export default function TabLayout() {
   const { summary, error, refresh } = useAppData();
@@ -17,9 +17,9 @@ export default function TabLayout() {
   return <Tabs screenOptions={({ route }) => ({
     headerShown: false,
     tabBarHideOnKeyboard: true,
-    tabBarActiveTintColor: colors.brand, tabBarInactiveTintColor: '#5B706D',
+    tabBarActiveTintColor: colors.brand, tabBarInactiveTintColor: colors.muted,
     tabBarLabelStyle: { fontSize: 12, fontFamily: 'PlusJakartaSans_600SemiBold' },
-    tabBarStyle: { backgroundColor: '#FFFFFF', borderTopColor: colors.line, paddingTop: 6 },
+    tabBarStyle: { backgroundColor: '#FFFFFF', borderTopColor: colors.line, paddingTop: 8 },
     tabBarIcon: ({ color, size, focused }) => {
       const base = icons[route.name as keyof typeof icons];
       return <Ionicons name={(focused ? base : `${base}-outline`) as IconName} size={size} color={color as string} />;

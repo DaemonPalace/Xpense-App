@@ -43,7 +43,8 @@ or removed**, so don't add more casually.
 ## Run it
 
 ```bash
-cd xpense-app && npm ci && npm test            # backend: 82 tests
+cd xpense-app && npm ci && npm test            # unit: 123 backend + 6 mobile
+npm run test:integration                       # 15 end-to-end tests on DynamoDB Local (Docker)
 cd mobile && npm install && npx expo start     # scan the QR with Expo Go
 npx tsc --noEmit && npx expo lint              # must stay clean
 ```
@@ -53,6 +54,26 @@ Deploy (use the operator email, otherwise the alarms and budget emails move to a
 ```bash
 cd xpense-app && npm run deploy -- -c alertEmail=<operator email>
 ```
+
+## Gmail connection (real bank data, added 2026-11-18)
+
+No Colombian aggregator gives free real-data access, so "Conectar Gmail" (Cuentas) reads the bank's purchase-alert
+e-mails with the `gmail.readonly` scope: 1-month backfill on connect, then a sync every 15 min (EventBridge Scheduler →
+IngestWorker `{mode:"gmailPoll"}`). Parser: `backend/src/lib/mail.ts`; Gmail client + sender list: `backend/src/lib/gmail.ts`.
+The simulated test bank stays for the live demo.
+
+One-time setup (the feature is off until `.google-oauth.json` exists):
+1. Google Cloud console → new project → enable **Gmail API**.
+2. OAuth consent screen: External, add the privacy URL `<SiteUrl>/privacy.html`, scope `.../auth/gmail.readonly`,
+   and add each tester's Gmail under **Test users** (max 100; unverified restricted scope).
+3. Credentials → OAuth client ID → **Web application**, authorized redirect URI `<SiteUrl>/api/gmail/callback`.
+4. Create `xpense-app/.google-oauth.json` (gitignored):
+   `{"clientId":"…","clientSecret":"…","redirectUri":"<SiteUrl>/api/gmail/callback"}` and deploy.
+   The first deploy also creates `.token-key` (gitignored AES key for stored refresh tokens) — keep it; losing it means
+   every user must reconnect.
+
+Known limit: while the consent screen is in **Testing**, Google expires refresh tokens after 7 days; the account then
+shows Error + "Reconectar Gmail". Publishing the app (still unverified, ≤100 users, users click past a warning) avoids it.
 
 ## Operator tasks (added 2026-11-11, need a deploy first)
 

@@ -2,9 +2,13 @@
   "name": "xpense-app",
   "private": true,
   "type": "module",
-  "workspaces": ["backend"],
+  "workspaces": [
+    "backend"
+  ],
   "scripts": {
-    "test": "vitest run --root backend",
+    "test": "vitest run --root backend && vitest run --root mobile",
+    "test:integration": "vitest run --root backend --config vitest.integration.config.ts",
+    "test:all": "npm test && npm run test:integration",
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p backend",
     "deploy": "cdk deploy",
     "synth": "cdk synth",
